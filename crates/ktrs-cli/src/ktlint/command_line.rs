@@ -11,6 +11,7 @@ use ktrs_lint::editorconfig::{
 use ktrs_lint::rule_provider::{RuleV2Provider, property_types};
 use ktrs_lint::{Code, EditorConfigDefaults, EditorConfigOverride, KtLintRuleEngine};
 
+use crate::changed_since::ChangedFiles;
 use crate::ktlint::args::{KtlintArgs, Parsed, Subcommand, USAGE_MAIN, parse_args};
 use crate::ktlint::baseline::{Baseline, load_baseline};
 use crate::ktlint::console::Console;
@@ -417,11 +418,13 @@ impl KtlintCli {
                 |file, result| report(file, result),
             );
         } else {
+            // With `--changed-since` the walk need not descend into directories no changed file is under.
+            let prune_dirs = changed.map(ChangedFiles::ancestors);
             parallel_stream(
                 |tx, stop| {
                     sequence.stream_into(tx, stop, &|_file, path| {
                         changed.is_none_or(|c| c.contains(path))
-                    })
+                    }, prune_dirs.as_ref())
                 },
                 stop,
                 |file: &Discovered| work(&file.file, &file.path),

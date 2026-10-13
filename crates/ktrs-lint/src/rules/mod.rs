@@ -234,9 +234,10 @@ pub const STANDARD_RULE_ABOUT: About = About {
 /// ktlint 1.8's rule set has (`only_in(V1_8)`; the 2.0 counterparts are `only_in(V2_0)`). Built once per process:
 /// each `RuleV2Provider::new` instantiates its rule for the metadata, so callers clone the cached list.
 pub fn standard_rule_providers() -> Vec<RuleV2Provider> {
-    static STANDARD_RULE_PROVIDERS: LazyLock<Vec<RuleV2Provider>> = LazyLock::new(standard_rule_providers_list);
     STANDARD_RULE_PROVIDERS.clone()
 }
+
+static STANDARD_RULE_PROVIDERS: LazyLock<Vec<RuleV2Provider>> = LazyLock::new(standard_rule_providers_list);
 
 fn standard_rule_providers_list() -> Vec<RuleV2Provider> {
     vec![
@@ -359,7 +360,8 @@ pub fn standard_rule_provider(id: &str) -> Option<RuleV2Provider> {
     } else {
         format!("standard:{id}")
     };
-    standard_rule_providers()
-        .into_iter()
+    STANDARD_RULE_PROVIDERS
+        .iter()
         .find(|p| p.rule_id().value() == id)
+        .cloned()
 }

@@ -43,7 +43,10 @@ pub(crate) fn create_rule_execution_context(
     }
     let mut ast = Ast::from_parse(&parse);
     ast.set_psi_file_name(&psi_file_name);
-    if let Some(error_element) = find_error_element(&ast, ast.root()) {
+    // Every error element carries a parse error message, so a clean parse has none to find.
+    if !parse.error_messages.is_empty()
+        && let Some(error_element) = find_error_element(&ast, ast.root())
+    {
         let (line, col) = position_in_text_locator
             .locate(ast.utf16_offset(error_element, ast.start_offset(error_element)));
         return Err(KtLintParseException {

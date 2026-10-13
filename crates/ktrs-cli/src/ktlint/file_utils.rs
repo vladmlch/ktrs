@@ -2,6 +2,7 @@
 //! directories) to the files to lint, walked in directory order from the patterns' common parent.
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -149,28 +150,39 @@ impl FileSequence {
         self.feed(&|| false, &mut |file| {
             result.push(file);
             true
-        });
+        }, None);
         result
     }
 
     /// The sequence onto `tx`, the walk run on this thread: `include` can drop a file (the
     /// `--changed-since` intersection), `stop` (the consumer's `takeWhile` condition) or a dead receiver
-    /// ends the feed early.
+    /// ends the feed early. `prune_dirs` (the ancestors of the files `include` keeps) skips the subtrees
+    /// that can hold none.
     pub fn stream_into(
         self,
         tx: Sender<Discovered>,
         stop: &dyn Fn() -> bool,
         include: &dyn Fn(&JPath, &Path) -> bool,
+        prune_dirs: Option<&HashSet<PathBuf>>,
     ) {
-        self.feed(stop, &mut |file| {
-            let path = file.to_path_buf();
-            !include(&file, &path) || tx.send(Discovered { file, path }).is_ok()
-        });
+        self.feed(
+            stop,
+            &mut |file| {
+                let path = file.to_path_buf();
+                !include(&file, &path) || tx.send(Discovered { file, path }).is_ok()
+            },
+            prune_dirs,
+        );
     }
 
     /// `yield_file`s the sequence until it is exhausted, `stop` holds or a yield returns `false` (`false`
     /// is returned then; `Discovered N files` logs only when the walk ran to its end).
-    fn feed(self, stop: &dyn Fn() -> bool, yield_file: &mut dyn FnMut(JPath) -> bool) -> bool {
+    fn feed(
+        self,
+        stop: &dyn Fn() -> bool,
+        yield_file: &mut dyn FnMut(JPath) -> bool,
+        prune_dirs: Option<&HashSet<PathBuf>>,
+    ) -> bool {
         let mut discovered = self.existing.len();
         for file in self.existing {
             if stop() || !yield_file(file) {
@@ -202,6 +214,7 @@ impl FileSequence {
                 }
             },
             &|| aborted.get() || stop(),
+            prune_dirs,
         );
         if completed {
             let duration = start.elapsed().as_millis();
@@ -215,12 +228,14 @@ impl FileSequence {
 
 /// `Files.walkFileTree` with ktlint's visitor: files (and links, which are not followed) are visited,
 /// hidden directories other than the start are skipped. Listing order is the file system's, like the JVM's.
-/// `stop` is checked between entries; `false` is returned when it ended the walk early.
+/// `stop` is checked between entries; `false` is returned when it ended the walk early. `prune` (the
+/// ancestors of the wanted files) skips a directory's whole subtree when it can hold none.
 fn walk_file_tree(
     dir: &JPath,
     start: &JPath,
     visit_file: &mut dyn FnMut(&str),
     stop: &dyn Fn() -> bool,
+    prune: Option<&HashSet<PathBuf>>,
 ) -> bool {
     let path = dir.to_path_buf();
     let Ok(metadata) = fs::symlink_metadata(&path) else {
@@ -240,10 +255,18 @@ fn walk_file_tree(
         if stop() {
             return false;
         }
-        if let Some(child) = dir.resolve(&entry.file_name().to_string_lossy())
-            && !walk_file_tree(&child, start, visit_file, stop)
-        {
-            return false;
+        if let Some(child) = dir.resolve(&entry.file_name().to_string_lossy()) {
+            // `file_type` comes with the entry. The wanted set is canonical and the walked path may
+            // not be (a symlinked ancestor), so a directory is resolved before it can be pruned.
+            if prune.is_some_and(|dirs| {
+                entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+                    && fs::canonicalize(&child.to_path_buf()).is_ok_and(|dir| !dirs.contains(&dir))
+            }) {
+                continue;
+            }
+            if !walk_file_tree(&child, start, visit_file, stop, prune) {
+                return false;
+            }
         }
     }
     true

@@ -49,6 +49,20 @@ impl ChangedFiles {
     pub fn contains_canonical(&self, file: &Path) -> bool {
         self.0.contains(file)
     }
+
+    /// Every directory that is an ancestor of a changed file (canonical, like `self.0`): a directory
+    /// holds no changed file unless it is one of these, so a walk can skip any other subtree.
+    pub fn ancestors(&self) -> HashSet<PathBuf> {
+        self.0
+            .iter()
+            .flat_map(|file| {
+                file.ancestors()
+                    .skip(1)
+                    .map(Path::to_path_buf)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
 }
 
 /// `git -C <dir> <args>`: its stdout, or its stderr when it fails.

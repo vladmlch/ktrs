@@ -3,6 +3,7 @@
 //! `after` at that node), preceded by a traversal of the internal suppression rule alone; in 1.8 mode
 //! 1.8's rule after rule (`rule_major.rs`).
 
+use std::cell::Cell;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
@@ -314,53 +315,95 @@ impl Traversal<'_, '_> {
         self.seq += 1;
         let entry_seq = self.seq;
         let kind = self.ast.element_type(node);
-        // Skipped hooks change nothing, so the replaced check only needs refreshing after a visit.
-        let mut replaced = is_replaced(self.ast, node);
-        // The rules from here on still ask upstream's replaced check, skipped ones included.
-        let mut unchecked_from = 0;
         let verify = VERIFY_VISITED_TYPES.load(Ordering::Relaxed);
-        let (start, len) = self.dispatch.rules_for(kind, rules.iter().map(|r| r.visited_types), verify);
-        for position in start..start + len {
-            let index = self.dispatch.rule_at(position);
-            let r = &mut rules[index];
-            if !r.visits(entry_seq) {
-                continue;
+        // One catch for the whole node instead of one per visit: `current` names the rule whose hook
+        // is running, so its panic is still attributed to it exactly as the per-visit catch did. A
+        // panic anywhere else (the traversal machinery, `note_stop`, `verify_skipped_visit`'s
+        // assertions) is not a rule exception and is resumed untouched, as it escaped before.
+        const NO_RULE: usize = usize::MAX;
+        let current = Cell::new(NO_RULE);
+        let outcome = catch_rule_panic(|| -> Result<(), RuleExecutionException> {
+            // Skipped hooks change nothing, so the replaced check only needs refreshing after a visit.
+            let mut replaced = is_replaced(self.ast, node);
+            // The rules from here on still ask upstream's replaced check, skipped ones included.
+            let mut unchecked_from = 0;
+            let (start, len) = self.dispatch.rules_for(kind, rules.iter().map(|r| r.visited_types), verify);
+            for position in start..start + len {
+                let index = self.dispatch.rule_at(position);
+                let r = &mut rules[index];
+                if !r.visits(entry_seq) {
+                    continue;
+                }
+                // A node replaced by an earlier rule (e.g. `rawReplaceWithText`) is not processed further.
+                if replaced {
+                    return Ok(());
+                }
+                if r.visited_types.is_none_or(|types| types.contains(kind)) {
+                    current.set(index);
+                    self.visit_hook(node, r, true);
+                    current.set(NO_RULE);
+                    r.note_stop(self.seq);
+                    replaced = is_replaced(self.ast, node);
+                } else if verify {
+                    self.verify_skipped_visit(node, r);
+                }
+                unchecked_from = index + 1;
             }
-            // A node replaced by an earlier rule (e.g. `rawReplaceWithText`) is not processed further.
-            if replaced {
+            if replaced && rules[unchecked_from..].iter().any(|r| r.visits(entry_seq)) {
                 return Ok(());
             }
-            if r.visited_types.is_none_or(|types| types.contains(kind)) {
-                self.visit(node, r, true)?;
-                replaced = is_replaced(self.ast, node);
-            } else if verify {
-                self.verify_skipped_visit(node, r);
+            let start = self.children.len();
+            self.ast.get_children(node, &mut self.children);
+            let end = self.children.len();
+            for i in start..end {
+                let child = self.children[i];
+                self.execute_rules_on_node_recursively(child, rules)?;
             }
-            unchecked_from = index + 1;
-        }
-        if replaced && rules[unchecked_from..].iter().any(|r| r.visits(entry_seq)) {
-            return Ok(());
-        }
-        let start = self.children.len();
-        self.ast.get_children(node, &mut self.children);
-        let end = self.children.len();
-        for i in start..end {
-            let child = self.children[i];
-            self.execute_rules_on_node_recursively(child, rules)?;
-        }
-        self.children.truncate(start);
-        // A no-op hook neither emits nor stops, and the next rule repeats the replaced check.
-        for position in 0..self.dispatch.after.len() {
-            let r = &mut rules[usize::from(self.dispatch.after[position])];
-            if !r.visits(entry_seq) {
-                continue;
+            self.children.truncate(start);
+            // A no-op hook neither emits nor stops, and the next rule repeats the replaced check.
+            for position in 0..self.dispatch.after.len() {
+                let index = usize::from(self.dispatch.after[position]);
+                let r = &mut rules[index];
+                if !r.visits(entry_seq) {
+                    continue;
+                }
+                if is_replaced(self.ast, node) {
+                    return Ok(());
+                }
+                current.set(index);
+                self.visit_hook(node, r, false);
+                current.set(NO_RULE);
+                r.note_stop(self.seq);
             }
-            if is_replaced(self.ast, node) {
-                return Ok(());
+            Ok(())
+        });
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => {
+                let index = current.get();
+                if index == NO_RULE {
+                    std::panic::resume_unwind(payload);
+                }
+                let r = &mut rules[index];
+                // The per-visit catch ran `note_stop` after a caught panic too (between the catch
+                // and the exception), so keep running it before attributing.
+                r.note_stop(self.seq);
+                // In format mode the node may not be in the original text, so no position is given.
+                let (line, col) = if self.lint_mode {
+                    self.position_in_text_locator
+                        .locate(self.ast.utf16_offset(node, self.ast.start_offset(node)))
+                } else {
+                    (0, 0)
+                };
+                Err(RuleExecutionException {
+                    rule_id: r.rule_id,
+                    about: r.rule.about(),
+                    line,
+                    col,
+                    cause: panic_message(payload),
+                })
             }
-            self.visit(node, r, false)?;
         }
-        Ok(())
     }
 
     /// Runs a hook that `visited_types` excludes and panics if it emits or edits the tree.
@@ -377,57 +420,28 @@ impl Traversal<'_, '_> {
         );
     }
 
-    fn visit(
-        &mut self,
-        node: NodeId,
-        r: &mut RuleInstance,
-        before: bool,
-    ) -> Result<(), RuleExecutionException> {
+    /// The part of a visit the catch covers: the suppression check, then the hook unless suppressed.
+    fn visit_hook(&mut self, node: NodeId, r: &mut RuleInstance, before: bool) {
         let root = self.ast.root();
         let rule_id = r.rule_id;
         let tree = self.ast.tree_root(node);
-        let outcome = catch_rule_panic(|| {
-            if !self.suppression_locator.suppress(
-                self.ast,
-                root,
-                node,
-                rule_id,
-                r.ignores_suppressions,
-            ) {
-                let emit_and_approve = &mut *self.emit_and_approve;
-                let mut emit =
-                    |ast: &Ast, offset: usize, message: &str, can_be_auto_corrected: bool| {
-                        emit_and_approve(
-                            ast.utf16_offset(tree, offset),
-                            rule_id,
-                            message,
-                            can_be_auto_corrected,
-                        )
-                    };
-                if before {
-                    r.rule.before_visit_child_nodes(self.ast, node, &mut emit);
-                } else {
-                    r.rule.after_visit_child_nodes(self.ast, node, &mut emit);
-                }
-            }
-        });
-        r.note_stop(self.seq);
-        outcome.map_err(|payload| {
-            // In format mode the node may not be in the original text, so no position is given.
-            let (line, col) = if self.lint_mode {
-                self.position_in_text_locator
-                    .locate(self.ast.utf16_offset(node, self.ast.start_offset(node)))
+        if !self.suppression_locator.suppress(self.ast, root, node, rule_id, r.ignores_suppressions) {
+            let emit_and_approve = &mut *self.emit_and_approve;
+            let mut emit =
+                |ast: &Ast, offset: usize, message: &str, can_be_auto_corrected: bool| {
+                    emit_and_approve(
+                        ast.utf16_offset(tree, offset),
+                        rule_id,
+                        message,
+                        can_be_auto_corrected,
+                    )
+                };
+            if before {
+                r.rule.before_visit_child_nodes(self.ast, node, &mut emit);
             } else {
-                (0, 0)
-            };
-            RuleExecutionException {
-                rule_id,
-                about: r.rule.about(),
-                line,
-                col,
-                cause: panic_message(payload),
+                r.rule.after_visit_child_nodes(self.ast, node, &mut emit);
             }
-        })
+        }
     }
 }
 

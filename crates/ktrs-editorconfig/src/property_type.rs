@@ -1,16 +1,53 @@
 //! Port of ec4j `model/PropertyType.java`: property types, parsed values and the value parsers.
 
+use std::any::Any;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 pub const UNSET: &str = "unset";
 
 /// `PropertyType.PropertyValue`: the source text, its parsed value (a valid value may parse to null, e.g.
 /// `indent_size = tab`) and the error of an invalid one.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct PropertyValue<T> {
     error_message: Option<String>,
     parsed: Option<T>,
     source: Option<String>,
+    /// `parsed` kept through [`PropertyValue::erase`]; a pure cache [`PropertyValue::typed`] reads,
+    /// so `PartialEq`/`Eq`/`Hash`/`Debug` ignore it exactly as the derives did.
+    parsed_any: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+/// What the derived `Debug` printed before `parsed_any` (which has no `Debug`) was added.
+impl<T: Debug> Debug for PropertyValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PropertyValue")
+            .field("error_message", &self.error_message)
+            .field("parsed", &self.parsed)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+/// What the derived `PartialEq` compared.
+impl<T: PartialEq> PartialEq for PropertyValue<T> {
+    fn eq(&self, other: &PropertyValue<T>) -> bool {
+        self.error_message == other.error_message
+            && self.parsed == other.parsed
+            && self.source == other.source
+    }
+}
+
+impl<T: Eq> Eq for PropertyValue<T> {}
+
+/// What the derived `Hash` hashed.
+impl<T: Hash> Hash for PropertyValue<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.error_message.hash(state);
+        self.parsed.hash(state);
+        self.source.hash(state);
+    }
 }
 
 impl<T> PropertyValue<T> {
@@ -19,6 +56,7 @@ impl<T> PropertyValue<T> {
             error_message: None,
             parsed: None,
             source: Some(UNSET.to_owned()),
+            parsed_any: None,
         }
     }
 
@@ -30,6 +68,7 @@ impl<T> PropertyValue<T> {
             error_message: Some(error_message),
             parsed: None,
             source: source.map(str::to_owned),
+            parsed_any: None,
         }
     }
 
@@ -41,6 +80,7 @@ impl<T> PropertyValue<T> {
             error_message: None,
             parsed: value,
             source: source.map(str::to_owned),
+            parsed_any: None,
         }
     }
 
@@ -67,14 +107,29 @@ impl<T> PropertyValue<T> {
     pub fn is_valid(&self) -> bool {
         self.error_message.is_none()
     }
+}
 
-    /// The untyped form a [`crate::Property`] stores; `parsed` only records whether a value was parsed.
+impl<T: Send + Sync + 'static> PropertyValue<T> {
+    /// The untyped form a [`crate::Property`] stores; `parsed` only records whether a value was parsed
+    /// while `parsed_any` keeps it for [`PropertyValue::typed`].
     pub fn erase(self) -> PropertyValue<()> {
+        let parsed_any = self
+            .parsed
+            .map(|v| Arc::new(v) as Arc<dyn Any + Send + Sync>);
         PropertyValue {
             error_message: self.error_message,
-            parsed: self.parsed.map(|_| ()),
+            parsed: parsed_any.as_ref().map(|_| ()),
             source: self.source,
+            parsed_any,
         }
+    }
+}
+
+impl PropertyValue<()> {
+    /// The value [`PropertyValue::erase`] kept, downcast to `U`: `None` when there is none or when it
+    /// was parsed by a `PropertyType` of another `T`.
+    pub fn typed<U: 'static>(&self) -> Option<&U> {
+        self.parsed_any.as_ref()?.downcast_ref::<U>()
     }
 }
 

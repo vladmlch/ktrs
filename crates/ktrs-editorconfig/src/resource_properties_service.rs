@@ -78,7 +78,17 @@ impl ResourcePropertiesService<'_> {
     /// `queryProperties(resource)`: `.editorconfig` files from the resource's directory upwards until a
     /// `root = true`; then the defaults (as if in the last directory); applied farthest first.
     pub fn query_properties(&self, resource: &Path) -> Result<ResourceProperties, ParseException> {
-        let mut result = ResourceProperties::default();
+        let editor_configs = self.discover_chain(resource)?;
+        Ok(self.apply_chain(resource, &editor_configs))
+    }
+
+    /// The lookup half of `query_properties`: `(directory, config)` pairs for the `.editorconfig` files
+    /// found walking up from the resource's directory, nearest first. It depends on `resource`'s
+    /// directory only, so every resource in one directory shares the chain.
+    pub fn discover_chain(
+        &self,
+        resource: &Path,
+    ) -> Result<Vec<(PathBuf, Arc<EditorConfig>)>, ParseException> {
         let mut editor_configs: Vec<(PathBuf, Arc<EditorConfig>)> = Vec::new();
         let mut root = false;
         let mut dir = resource.parent();
@@ -86,13 +96,29 @@ impl ResourcePropertiesService<'_> {
             let config_file = d.join(self.config_file_name);
             if config_file.exists() {
                 let config = self.cache.get(&config_file, self.registry)?;
-                result.editor_config_files.push(config_file);
                 root = config.is_root();
                 editor_configs.push((d.to_path_buf(), config));
             }
             root |= self.root_directories.iter().any(|r| r == d);
             dir = d.parent();
         }
+        Ok(editor_configs)
+    }
+
+    /// The merge half of `query_properties` over a `discover_chain` chain: the defaults apply as if in
+    /// the chain's last (farthest) directory — the resource's when it is empty — then every config's
+    /// matching sections apply farthest first.
+    pub fn apply_chain(
+        &self,
+        resource: &Path,
+        chain: &[(PathBuf, Arc<EditorConfig>)],
+    ) -> ResourceProperties {
+        let mut result = ResourceProperties::default();
+        result.editor_config_files = chain
+            .iter()
+            .map(|(d, _)| d.join(self.config_file_name))
+            .collect();
+        let mut editor_configs: Vec<(PathBuf, Arc<EditorConfig>)> = chain.to_vec();
         if !self.default_editor_configs.is_empty() {
             let last_dir = match editor_configs.last() {
                 None => resource.parent().map(Path::to_path_buf).unwrap_or_default(),
@@ -121,7 +147,7 @@ impl ResourcePropertiesService<'_> {
                 }
             }
         }
-        Ok(result)
+        result
     }
 }
 

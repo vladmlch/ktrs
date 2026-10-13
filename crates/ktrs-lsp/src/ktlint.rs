@@ -53,15 +53,17 @@ impl KtlintEngines {
     }
 
     /// Re-reads a changed `.editorconfig` in ktlint's (process-wide) cache, or drops the cache when `path` was
-    /// created or deleted (the cache may hold its absence).
+    /// created or deleted (the cache may hold its absence). Every engine keeps its own memoized directory
+    /// chains, so all engines are dropped, not just the first.
     pub(crate) fn editor_config_changed(&self, path: &Path, created_or_deleted: bool) -> Result<(), String> {
-        let Some((_, engine)) = self.engines.first() else { return Ok(()) };
-        if created_or_deleted {
-            engine.trim_memory();
-            Ok(())
-        } else {
-            engine.reload_editor_config_file(path).map_err(|e| e.to_string())
+        for (_, engine) in &self.engines {
+            if created_or_deleted {
+                engine.trim_memory();
+            } else {
+                engine.reload_editor_config_file(path).map_err(|e| e.to_string())?;
+            }
         }
+        Ok(())
     }
 }
 

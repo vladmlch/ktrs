@@ -65,9 +65,16 @@ impl Property {
 
     /// `getValueAs()` for a property of type `t`: the parsed value, or the `RuntimeException` ec4j throws
     /// when the loaded value is invalid.
-    pub fn get_value_as<T>(&self, t: &PropertyType<T>) -> Option<T> {
+    pub fn get_value_as<T: Clone>(&self, t: &PropertyType<T>) -> Option<T> {
         match self.value.error_message() {
-            None => t.parse(self.value.source()).into_parsed(),
+            None => {
+                if parsed_by(self.type_, t)
+                    && let Some(value) = self.value.typed::<T>()
+                {
+                    return Some(value.clone());
+                }
+                t.parse(self.value.source()).into_parsed()
+            }
             Some(error) => panic!("RuntimeException: {error}"),
         }
     }
@@ -83,6 +90,19 @@ impl Property {
     pub fn value(&self) -> &PropertyValue<()> {
         &self.value
     }
+}
+
+/// Whether the stored value was parsed by `t` itself: `type_` records the type the registry resolved
+/// for the property's name (and `Property::new` parses with it), which need not be the `t` a caller
+/// passes — a same-named `PropertyType` of the same `T` could parse differently, and only the same
+/// `PropertyType` object is guaranteed to produce the stored value.
+fn parsed_by<T>(property_type: Option<&'static dyn AnyPropertyType>, t: &PropertyType<T>) -> bool {
+    property_type.is_some_and(|pt| {
+        std::ptr::eq(
+            pt as *const dyn AnyPropertyType as *const (),
+            t as *const PropertyType<T> as *const (),
+        )
+    })
 }
 
 impl std::fmt::Display for Property {

@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ktrs_editorconfig::{AnyPropertyType, Property, PropertyType, PropertyValue};
 
@@ -74,6 +74,8 @@ pub struct EditorConfigProperty<T: PropertyValueType> {
     pub deprecation_warning: Option<&'static str>,
     pub deprecation_error: Option<&'static str>,
     pub name: Cow<'static, str>,
+    /// Memoized `identity()` result (computed on first call; not an upstream field).
+    pub identity_cache: OnceLock<String>,
 }
 
 impl<T: PropertyValueType> EditorConfigProperty<T> {
@@ -90,6 +92,7 @@ impl<T: PropertyValueType> EditorConfigProperty<T> {
             deprecation_warning: None,
             deprecation_error: None,
             name: Cow::Borrowed(type_.name),
+            identity_cache: OnceLock::new(),
         }
     }
 
@@ -133,17 +136,21 @@ impl<T: PropertyValueType> AnyEditorConfigProperty for EditorConfigProperty<T> {
     }
 
     fn identity(&self) -> String {
-        format!(
-            "{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
-            self.name,
-            self.type_.name,
-            self.default_value,
-            self.ktlint_official_code_style_default_value,
-            self.intellij_idea_code_style_default_value,
-            self.android_studio_code_style_default_value,
-            self.deprecation_warning,
-            self.deprecation_error
-        )
+        self.identity_cache
+            .get_or_init(|| {
+                format!(
+                    "{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+                    self.name,
+                    self.type_.name,
+                    self.default_value,
+                    self.ktlint_official_code_style_default_value,
+                    self.intellij_idea_code_style_default_value,
+                    self.android_studio_code_style_default_value,
+                    self.deprecation_warning,
+                    self.deprecation_error
+                )
+            })
+            .clone()
     }
 }
 

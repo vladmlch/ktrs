@@ -39,8 +39,15 @@ impl ChangedFiles {
         Ok(ChangedFiles(files.filter_map(|path| fs::canonicalize(top_level.join(path)).ok()).collect()))
     }
 
+    /// `canonicalize`s `file` and looks it up: one `fs` call, meant to run once per file (the caller
+    /// keeps the file's `Path` for `Code::from_file` and the like).
     pub fn contains(&self, file: &Path) -> bool {
-        fs::canonicalize(file).is_ok_and(|file| self.0.contains(&file))
+        fs::canonicalize(file).is_ok_and(|file| self.contains_canonical(&file))
+    }
+
+    /// `contains` on an already-canonicalized path.
+    pub fn contains_canonical(&self, file: &Path) -> bool {
+        self.0.contains(file)
     }
 }
 

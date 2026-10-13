@@ -1,5 +1,7 @@
 //! Port of ktlint-rule-engine `internal/CodeFormatter.kt` (the format loop) and `AutocorrectHandler.kt`.
 
+use std::borrow::Cow;
+
 use ktrs_ast::Ast;
 
 use crate::editorconfig::{END_OF_LINE_PROPERTY, EndOfLineValue};
@@ -56,15 +58,16 @@ impl ErrorSet {
 const CODE_FORMATTER_LOGGER: &str = "io.github.ktlint.core.rule.engine.internal.CodeFormatter";
 const NOT_RESOLVED: &str = "Format was not able to resolve all violations which (theoretically) can be autocorrected in file";
 
-/// `format(code, autocorrectHandler, callback, maxFormatRunsPerFile)`.
-pub(crate) fn format(
+/// `format(code, autocorrectHandler, callback, maxFormatRunsPerFile)`. The unmutated result borrows
+/// `code.content`; callers returning a `String` pay the copy, `lint` just drops it.
+pub(crate) fn format<'a>(
     engine: &KtLintRuleEngine,
-    code: &Code,
+    code: &'a Code,
     autocorrect_handler: AutocorrectHandler<'_>,
     callback: &mut dyn FnMut(&LintError, bool),
     max_format_runs_per_file: usize,
     after_pass: &mut dyn FnMut(&Ast),
-) -> Result<String, KtLintException> {
+) -> Result<Cow<'a, str>, KtLintException> {
     let (formatted_code, mut errors) = format_code(
         engine,
         code,
@@ -84,21 +87,27 @@ pub(crate) fn format(
     Ok(if formatted_code.starts_with(&bom) {
         formatted_code
     } else {
-        bom + &formatted_code
+        Cow::Owned(bom + &formatted_code)
     })
 }
 
-fn format_code(
+fn format_code<'a>(
     engine: &KtLintRuleEngine,
-    code: &Code,
+    code: &'a Code,
     mut autocorrect_handler: AutocorrectHandler<'_>,
     max_format_runs_per_file: usize,
     after_pass: &mut dyn FnMut(&Ast),
-) -> Result<(String, Vec<(LintError, bool)>), KtLintException> {
+) -> Result<(Cow<'a, str>, Vec<(LintError, bool)>), KtLintException> {
     let mut context = create_rule_execution_context(engine, code)?;
     let line_separator =
         determine_line_separator(code, context.setup.editor_config.get(&END_OF_LINE_PROPERTY));
-    let mut code_content = formatted_code(&context, line_separator);
+    // With no autocorrect handler no error can be approved, so the loop breaks after the first pass
+    // and `code_content` is never read: materializing the formatted text is skipped in lint mode.
+    let mut code_content = if autocorrect_handler.is_none() {
+        String::new()
+    } else {
+        formatted_code(&context, line_separator)
+    };
     let mut errors = ErrorSet::default();
     let mut format_run_count = 0;
     let mut mutated = false;
@@ -132,9 +141,9 @@ fn format_code(
         });
     }
     let formatted = if mutated {
-        formatted_code(&context, line_separator)
+        Cow::Owned(formatted_code(&context, line_separator))
     } else {
-        code.content.clone()
+        Cow::Borrowed(code.content.as_str())
     };
     Ok((formatted, errors.into_distinct()))
 }

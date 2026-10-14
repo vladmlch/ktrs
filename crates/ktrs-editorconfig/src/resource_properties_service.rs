@@ -118,20 +118,9 @@ impl ResourcePropertiesService<'_> {
             .iter()
             .map(|(d, _)| d.join(self.config_file_name))
             .collect();
-        let mut editor_configs: Vec<(PathBuf, Arc<EditorConfig>)> = chain.to_vec();
-        if !self.default_editor_configs.is_empty() {
-            let last_dir = match editor_configs.last() {
-                None => resource.parent().map(Path::to_path_buf).unwrap_or_default(),
-                Some((d, _)) => d.clone(),
-            };
-            for ec in &self.default_editor_configs {
-                editor_configs.push((last_dir.clone(), ec.clone()));
-            }
-        }
-        for (editor_config_dir, config) in editor_configs.iter().rev() {
-            let path = relativize(editor_config_dir, resource);
+        let apply_config = |result: &mut ResourceProperties, path: &str, config: &EditorConfig| {
             for section in config.sections() {
-                if !section.is_match(&path) {
+                if !section.is_match(path) {
                     continue;
                 }
                 if self.keep_unset {
@@ -146,6 +135,20 @@ impl ResourcePropertiesService<'_> {
                     }
                 }
             }
+        };
+        if !self.default_editor_configs.is_empty() {
+            let last_dir = match chain.last() {
+                None => resource.parent().unwrap_or(Path::new("")),
+                Some((d, _)) => d.as_path(),
+            };
+            let path = relativize(last_dir, resource);
+            for ec in self.default_editor_configs.iter().rev() {
+                apply_config(&mut result, &path, ec);
+            }
+        }
+        for (editor_config_dir, config) in chain.iter().rev() {
+            let path = relativize(editor_config_dir, resource);
+            apply_config(&mut result, &path, config);
         }
         result
     }
@@ -155,9 +158,12 @@ impl ResourcePropertiesService<'_> {
 /// Windows replaces `\`).
 fn relativize(dir: &Path, resource: &Path) -> String {
     let relative = resource.strip_prefix(dir).unwrap_or(resource);
-    relative
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut path = String::new();
+    for (i, c) in relative.components().enumerate() {
+        if i > 0 {
+            path.push('/');
+        }
+        path.push_str(&c.as_os_str().to_string_lossy());
+    }
+    path
 }

@@ -355,13 +355,11 @@ fn standard_rule_providers_list() -> Vec<RuleV2Provider> {
 
 /// The provider of a ported standard rule by id (`standard:` prefix optional).
 pub fn standard_rule_provider(id: &str) -> Option<RuleV2Provider> {
-    let id = if id.contains(':') {
-        id.to_owned()
-    } else {
-        format!("standard:{id}")
-    };
     STANDARD_RULE_PROVIDERS
         .iter()
-        .find(|p| p.rule_id().value() == id)
+        .find(|p| {
+            let val = p.rule_id().value();
+            val == id || val.strip_prefix("standard:") == Some(id)
+        })
         .cloned()
 }

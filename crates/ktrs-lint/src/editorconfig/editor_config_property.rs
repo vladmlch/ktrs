@@ -115,7 +115,7 @@ pub trait AnyEditorConfigProperty: Debug + Send + Sync {
     /// `type.parse(value)`, untyped.
     fn parse(&self, value: Option<&str>) -> PropertyValue<()>;
     /// What `@Poko` equality looks at, minus the lambdas (which are shared singletons upstream).
-    fn identity(&self) -> String;
+    fn identity(&self) -> &str;
 }
 
 impl<T: PropertyValueType> AnyEditorConfigProperty for EditorConfigProperty<T> {
@@ -135,7 +135,7 @@ impl<T: PropertyValueType> AnyEditorConfigProperty for EditorConfigProperty<T> {
         self.type_.parse(value).erase()
     }
 
-    fn identity(&self) -> String {
+    fn identity(&self) -> &str {
         self.identity_cache
             .get_or_init(|| {
                 format!(
@@ -150,7 +150,7 @@ impl<T: PropertyValueType> AnyEditorConfigProperty for EditorConfigProperty<T> {
                     self.deprecation_error
                 )
             })
-            .clone()
+            .as_str()
     }
 }
 

@@ -192,9 +192,11 @@ impl FileSequence {
         let Some(walk) = self.walk else { return true };
         let aborted = Cell::new(false);
         let start = Instant::now();
+        let canonical_root = prune_dirs.and_then(|_| fs::canonicalize(walk.common_root_dir.to_path_buf()).ok());
         let completed = walk_file_tree(
             &walk.common_root_dir,
             &walk.common_root_dir,
+            canonical_root.as_deref(),
             &mut |jpath, path_str| {
                 if !walk.negated_path_matchers.iter().any(|m| m.matches(path_str))
                     && walk.path_matchers.iter().any(|m| m.matches(path_str))
@@ -231,6 +233,7 @@ impl FileSequence {
 fn walk_file_tree(
     dir: &JPath,
     start: &JPath,
+    canonical_dir: Option<&Path>,
     visit_file: &mut dyn FnMut(&JPath, &str),
     stop: &dyn Fn() -> bool,
     prune: Option<&HashSet<PathBuf>>,
@@ -250,30 +253,52 @@ fn walk_file_tree(
     let Ok(entries) = fs::read_dir(&path) else {
         return true;
     };
+    let canonical_root;
+    let canonical_dir = match (prune, canonical_dir) {
+        (Some(_), None) => {
+            canonical_root = fs::canonicalize(&path).ok();
+            canonical_root.as_deref()
+        }
+        _ => canonical_dir,
+    };
     for entry in entries.flatten() {
         if stop() {
             return false;
         }
-        if let Some(child) = dir.resolve(&entry.file_name().to_string_lossy()) {
-            match entry.file_type() {
-                Ok(file_type) if file_type.is_file() => {
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_file() || file_type.is_symlink() => {
+                let file_name = entry.file_name();
+                if let Some(child) = dir.resolve(&file_name.to_string_lossy()) {
                     let path_str = child.to_string();
                     visit_file(&child, &path_str);
                 }
-                Ok(file_type) if file_type.is_dir() => {
-                    // `file_type` comes with the entry. The wanted set is canonical and the walked path may
-                    // not be (a symlinked ancestor), so a directory is resolved before it can be pruned.
-                    if prune.is_some_and(|dirs| {
-                        fs::canonicalize(&child.to_path_buf()).is_ok_and(|dir| !dirs.contains(&dir))
-                    }) {
-                        continue;
-                    }
-                    if !walk_file_tree(&child, start, visit_file, stop, prune) {
+            }
+            Ok(file_type) if file_type.is_dir() => {
+                let file_name = entry.file_name();
+                let child_canon = canonical_dir.map(|c| c.join(&file_name));
+                if prune.is_some_and(|dirs| match &child_canon {
+                    Some(dir) => !dirs.contains(dir),
+                    None => fs::canonicalize(entry.path()).is_ok_and(|dir| !dirs.contains(&dir)),
+                }) {
+                    continue;
+                }
+                if let Some(child) = dir.resolve(&file_name.to_string_lossy()) {
+                    if !walk_file_tree(
+                        &child,
+                        start,
+                        child_canon.as_deref(),
+                        visit_file,
+                        stop,
+                        prune,
+                    ) {
                         return false;
                     }
                 }
-                _ => {
-                    if !walk_file_tree(&child, start, visit_file, stop, prune) {
+            }
+            _ => {
+                let file_name = entry.file_name();
+                if let Some(child) = dir.resolve(&file_name.to_string_lossy()) {
+                    if !walk_file_tree(&child, start, None, visit_file, stop, prune) {
                         return false;
                     }
                 }

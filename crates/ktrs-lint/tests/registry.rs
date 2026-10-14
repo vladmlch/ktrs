@@ -43,3 +43,28 @@ fn rule_set_membership_differs_as_between_the_releases() {
         ]
     );
 }
+
+#[test]
+fn standard_rule_provider_lookup() {
+    use ktrs_lint::rules::standard_rule_provider;
+
+    // With prefix
+    let p1 = standard_rule_provider("standard:annotation-spacing");
+    assert!(p1.is_some());
+    assert_eq!(p1.unwrap().rule_id().value(), "standard:annotation-spacing");
+
+    // Without prefix
+    let p2 = standard_rule_provider("annotation-spacing");
+    assert!(p2.is_some());
+    assert_eq!(p2.unwrap().rule_id().value(), "standard:annotation-spacing");
+
+    // Non-existent rule
+    assert!(standard_rule_provider("nonexistent-rule").is_none());
+    assert!(standard_rule_provider("standard:nonexistent-rule").is_none());
+    assert!(standard_rule_provider("custom:annotation-spacing").is_none());
+    assert!(standard_rule_provider("").is_none());
+    assert!(standard_rule_provider("standard:").is_none());
+    assert!(standard_rule_provider(":").is_none());
+    assert!(standard_rule_provider("standard:standard:annotation-spacing").is_none());
+    assert!(standard_rule_provider("annotation-spacing:extra").is_none());
+}

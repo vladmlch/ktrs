@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use ktrs_editorconfig::{AnyPropertyType, Property, PropertyType, PropertyValue};
+use ktrs_editorconfig::{Property, PropertyType, PropertyValue};
 
 use crate::editorconfig::code_style::{CODE_STYLE_PROPERTY, CodeStyleValue};
 use crate::editorconfig::editor_config_property::{
@@ -101,7 +101,7 @@ impl EditorConfig {
         let property = self.property(p.type_.name);
         let source = property.and_then(Property::source_value);
         let property_value = match property
-            .filter(|property| parsed_by(*property, p.type_))
+            .filter(|property| property.is_parsed_by(p.type_))
             .and_then(|property| property.value().typed::<T>())
         {
             Some(value) => PropertyValue::valid(source, Some(value.clone())),
@@ -122,7 +122,7 @@ impl EditorConfig {
         let property = self.property(property_name);
         let source = property.and_then(Property::source_value);
         match property
-            .filter(|property| parsed_by(*property, property_type))
+            .filter(|property| property.is_parsed_by(property_type))
             .and_then(|property| property.value().typed::<T>())
         {
             Some(value) => PropertyValue::valid(source, Some(value.clone())).into_parsed(),
@@ -160,19 +160,6 @@ impl EditorConfig {
     pub fn filter_by(&self, additional: &[PropertyRef]) -> EditorConfig {
         self.add_properties_with_default_value_if_missing(additional)
     }
-}
-
-/// Whether `property`'s stored value was parsed by `t` itself: `Property::type_` records the type the
-/// registry resolved for the property's name, which need not be the `t` a `get` parses with — a
-/// same-named `PropertyType` of the same `T` could parse differently, and only the same `PropertyType`
-/// object is guaranteed to produce the stored value.
-fn parsed_by<T>(property: &Property, t: &PropertyType<T>) -> bool {
-    property.type_().is_some_and(|pt| {
-        std::ptr::eq(
-            pt as *const dyn AnyPropertyType as *const (),
-            t as *const PropertyType<T> as *const (),
-        )
-    })
 }
 
 fn require_singular_identities(editor_config_properties: &[&PropertyRef]) {

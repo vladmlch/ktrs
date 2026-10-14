@@ -223,3 +223,51 @@ fn an_invalid_value_of_a_registered_type_is_no_error() {
         "an unregistered property is always valid"
     );
 }
+
+#[test]
+fn property_is_parsed_by_and_apply_chain_defaults() {
+    use ktrs_editorconfig::property_type::{INDENT_SIZE, INDENT_STYLE};
+    use std::sync::Arc;
+
+    let editor_config = parse("[*]\nindent_size = 4", "test", &registry()).unwrap();
+    let prop = &editor_config.sections()[0].properties()[0];
+    assert!(prop.is_parsed_by(&INDENT_SIZE));
+    assert!(!prop.is_parsed_by(&INDENT_STYLE));
+
+    let def1 = parse("[*]\nindent_size = 1\nprop1 = a\nprop2 = a", "def1", &registry()).unwrap();
+    let def2 = parse("[*]\nindent_size = 2\nprop2 = b\nprop3 = b", "def2", &registry()).unwrap();
+    let parent_config = parse("[*]\nindent_size = 8", "parent", &registry()).unwrap();
+    let child_config = parse("[*]\nindent_size = 4", "child", &registry()).unwrap();
+
+    let service = ResourcePropertiesService {
+        cache: &NoCache,
+        config_file_name: ".editorconfig",
+        default_editor_configs: vec![Arc::new(def1), Arc::new(def2)],
+        keep_unset: false,
+        registry: &registry(),
+        root_directories: Vec::new(),
+    };
+    // chain is nearest first: [child, parent]
+    let chain = vec![
+        (PathBuf::from("/root/child"), Arc::new(child_config)),
+        (PathBuf::from("/root"), Arc::new(parent_config)),
+    ];
+    let res = service.apply_chain(std::path::Path::new("/root/child/file.kt"), &chain);
+
+    let get_val = |name: &str| -> Option<String> {
+        res.properties()
+            .iter()
+            .find(|p| p.name() == name)
+            .and_then(|p| p.source_value())
+            .map(|s| s.to_string())
+    };
+
+    // Child config overrides parent config and defaults
+    assert_eq!(get_val("indent_size"), Some("4".to_string()));
+    // Earlier default (def1) overrides later default (def2)
+    assert_eq!(get_val("prop2"), Some("a".to_string()));
+    // def1 is retained
+    assert_eq!(get_val("prop1"), Some("a".to_string()));
+    // def2 is retained when not overridden by def1
+    assert_eq!(get_val("prop3"), Some("b".to_string()));
+}

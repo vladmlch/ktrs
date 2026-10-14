@@ -186,3 +186,25 @@ fn given_that_a_file_is_stored_in_the_cache_and_then_the_cache_is_cleared_and_th
         parse(&edit_config("edit-config-2"), "", &registry()).unwrap()
     );
 }
+
+#[test]
+fn given_that_a_file_is_stored_in_the_cache_and_then_reloaded_with_syntax_error_it_is_evicted() {
+    let cache = ThreadSafeEditorConfigCache::default();
+    let fs = TestFileSystem::new();
+    fs.write_root_editor_config_file(&edit_config("edit-config-1"));
+    let file_1 = fs.resolve(".editorconfig");
+    cache.get(&file_1, &registry()).unwrap();
+    assert_eq!(cache.get_paths(), vec![file_1.clone()]);
+
+    // Overwrite with invalid editorconfig (syntax error)
+    std::fs::write(&file_1, "[unclosed section\nkey = val\n").unwrap();
+    let result = cache.reload_if_exists(&file_1);
+    assert!(result.is_err(), "reload should fail on invalid syntax");
+
+    // The stale entry must be gone from cache
+    assert!(cache.get_paths().is_empty());
+
+    // Subsequent get should also fail rather than returning stale cached config
+    assert!(cache.get(&file_1, &registry()).is_err());
+}
+

@@ -78,9 +78,14 @@ impl SuppressionLocator {
         rule_id: RuleId,
         ignores_suppressions: bool,
     ) -> bool {
-        if !self.refresh_may_have_hints(ast) {
-            // Nothing could ever have made a hint, so every rebuild would have found none.
+        if ignores_suppressions {
             return false;
+        }
+        if !self.may_have_hints {
+            let text = ast.allocated_leaf_text();
+            if text.len() <= self.scanned_leaf_text || !self.refresh_may_have_hints(ast) {
+                return false;
+            }
         }
         let modification_count = ast.modification_count();
         if self.checked_modification_count != Some(modification_count) {
@@ -92,7 +97,7 @@ impl SuppressionLocator {
                 self.covering_key = None;
             }
         }
-        if ignores_suppressions || self.suppression_hints.is_empty() {
+        if self.suppression_hints.is_empty() {
             return false;
         }
         // Every rule asks about the same node in turn: filter the hints by offset once.
@@ -112,9 +117,14 @@ impl SuppressionLocator {
         })
     }
 
+    #[inline(always)]
+    pub fn can_suppress(&self) -> bool {
+        self.may_have_hints
+    }
+
     /// Hints come only from `@Suppress`/`@SuppressWarnings` annotations and formatter-tag comments. Leaf
     /// text never changes and a new leaf's text is appended whole, so scanning the new text suffices.
-    fn refresh_may_have_hints(&mut self, ast: &Ast) -> bool {
+    pub fn refresh_may_have_hints(&mut self, ast: &Ast) -> bool {
         let text = ast.allocated_leaf_text();
         if !self.may_have_hints && text.len() > self.scanned_leaf_text {
             self.may_have_hints = text[self.scanned_leaf_text..].contains("Suppress");
@@ -248,12 +258,10 @@ fn rbrace_of_containing_block(ast: &Ast, n: NodeId) -> Option<NodeId> {
         .filter(|&it| ast.element_type(it) == RBRACE)
 }
 
-const SUPPRESS_ANNOTATIONS: [&str; 2] = ["Suppress", "SuppressWarnings"];
-
 fn is_suppress_annotation(ast: &Ast, n: NodeId) -> bool {
     ast.find_child_by_type(n, CONSTRUCTOR_CALLEE)
         .and_then(|it| ast.find_child_by_type(it, TYPE_REFERENCE))
-        .is_some_and(|it| SUPPRESS_ANNOTATIONS.contains(&ast.text(it).as_str()))
+        .is_some_and(|it| ast.text_matches(it, "Suppress") || ast.text_matches(it, "SuppressWarnings"))
 }
 
 fn create_suppression_hint_from_annotations(ast: &Ast, n: NodeId, ktlint_version: KtlintVersion) -> Option<SuppressionHint> {

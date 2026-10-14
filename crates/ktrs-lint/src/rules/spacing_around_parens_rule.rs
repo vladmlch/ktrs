@@ -175,7 +175,7 @@ fn has_no_newline_after_lpar(ast: &Ast, node: NodeId, ktlint_version: KtlintVers
 }
 
 fn fix_unexpected_spacing_around(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
-    let message = format!("Unexpected spacing around \"{}\"", ast.text(node));
+    let message = format!("Unexpected spacing around \"{}\"", ast.leaf_text(node));
     emit(ast, ast.start_offset(node), &message, true).if_autocorrect_allowed(|| {
         let prev_leaf = ast.prev_leaf(node).expect("NullPointerException: prevLeaf!!");
         ast.remove(prev_leaf);
@@ -185,7 +185,7 @@ fn fix_unexpected_spacing_around(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_
 }
 
 fn fix_unexpected_spacing_before(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
-    let message = format!("Unexpected spacing before \"{}\"", ast.text(node));
+    let message = format!("Unexpected spacing before \"{}\"", ast.leaf_text(node));
     let prev_leaf = ast.prev_leaf(node).expect("NullPointerException: prevLeaf!!");
     emit(ast, ast.start_offset(prev_leaf), &message, true).if_autocorrect_allowed(|| {
         if let Some(prev_leaf) = ast.prev_leaf(node) {
@@ -195,7 +195,7 @@ fn fix_unexpected_spacing_before(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_
 }
 
 fn fix_unexpect_spacing_after(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
-    let message = format!("Unexpected spacing after \"{}\"", ast.text(node));
+    let message = format!("Unexpected spacing after \"{}\"", ast.leaf_text(node));
     emit(ast, ast.start_offset(node) + 1, &message, true).if_autocorrect_allowed(|| {
         let next_leaf = ast.next_leaf(node).expect("NullPointerException: nextLeaf!!");
         ast.remove(next_leaf);

@@ -5,13 +5,9 @@
 
 use std::path::Path;
 
-use ktrs_editorconfig::EnumValue;
-use ktrs_lint::editorconfig::KtlintVersion;
+use ktrs_editorconfig::{AnyPropertyType, EnumValue, NoCache, PropertyTypeRegistry, ResourcePropertiesService};
+use ktrs_lint::editorconfig::{KTLINT_VERSION_PROPERTY_TYPE, KtlintVersion};
 pub use ktrs_lint::editorconfig::with_ktlint_version;
-use ktrs_lint::engine::editor_config_loader::{EditorConfigLoader, EditorConfigLoaderEc4j};
-use ktrs_lint::rule_provider::property_types;
-use ktrs_lint::rules::standard_rule_providers;
-use ktrs_lint::{EditorConfigDefaults, EditorConfigOverride};
 
 use crate::ktlint::command_line::ExitCode;
 use crate::ktlint::reporter::KTLINT_VERSION;
@@ -41,13 +37,36 @@ fn option_value(tokens: &[String]) -> Result<Option<&str>, String> {
     Ok(value)
 }
 
-/// Loaded with the engine's property types: the `.editorconfig` cache keeps the first parse of a file. An
-/// unreadable `.editorconfig` counts as unset here; the engine reports it on the first file.
+/// Only `ktrs_ktlint_version`, read with a minimal registry (the standard ec4j types plus this one, so a
+/// `root = true` still stops the walk) and `NoCache`: the shared cache is keyed by path alone and must
+/// keep the engine's later full-registry parse, and startup need not build the rule providers for this.
+/// An unreadable `.editorconfig` counts as unset here; the engine reports it on the first file.
 fn working_dir_ktlint_version(working_dir: &Path) -> KtlintVersion {
-    let property_types = property_types(&standard_rule_providers());
-    EditorConfigLoader::new(EditorConfigLoaderEc4j::new(&property_types), EditorConfigDefaults::empty(), EditorConfigOverride::empty())
-        .load(Some(&working_dir.join(".kt")))
-        .map_or(KtlintVersion::default(), |editor_config| KtlintVersion::of(&editor_config))
+    let registry = PropertyTypeRegistry::with_defaults([&KTLINT_VERSION_PROPERTY_TYPE as &dyn AnyPropertyType]);
+    let service = ResourcePropertiesService {
+        cache: &NoCache,
+        config_file_name: ".editorconfig",
+        default_editor_configs: Vec::new(),
+        keep_unset: true,
+        registry: &registry,
+        root_directories: Vec::new(),
+    };
+    // `EditorConfigLoader.load`'s `to_absolute_path`, so a relative `working_dir` walks the same chain.
+    let resource = working_dir.join(".kt");
+    let resource = if resource.is_absolute() {
+        resource
+    } else {
+        std::env::current_dir().unwrap_or_default().join(resource)
+    };
+    let properties = match service.query_properties(&resource) {
+        Ok(resource_properties) => resource_properties.into_properties(),
+        Err(_) => return KtlintVersion::default(),
+    };
+    let source = properties
+        .iter()
+        .find(|p| p.name() == KTLINT_VERSION_PROPERTY_TYPE.name)
+        .and_then(|p| p.source_value());
+    KTLINT_VERSION_PROPERTY_TYPE.parse(source).into_parsed().unwrap_or_default()
 }
 
 /// The release `--version` and the SARIF reporter show.

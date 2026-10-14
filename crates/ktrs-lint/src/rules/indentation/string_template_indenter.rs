@@ -67,6 +67,7 @@ impl StringTemplateIndenter {
                 let text = ast.text(it);
                 let (actual_indent, actual_content) = split_indent_at(&text, usize::MAX);
                 if actual_indent != corrected_expected_indent {
+                    let actual_content = actual_content.to_owned();
                     // It is a deliberate choice not to fix the indents inside the string literal except the line which only
                     // contains the closing quotes. See 'string-template-indent` rule for fixing the content of the string
                     // template itself

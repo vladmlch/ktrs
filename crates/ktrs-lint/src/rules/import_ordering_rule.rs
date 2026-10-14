@@ -156,7 +156,7 @@ fn get_unique_imports_and_blank_lines(ast: &Ast, children: &[NodeId], emit: &mut
     let mut import_text_set: Vec<String> = Vec::new();
 
     for &current in children {
-        if ast.is_white_space(current) && ast.text(current).matches('\n').count() > 1 {
+        if ast.is_white_space(current) && ast.newline_count(current) > 1 {
             imports.push(current);
         } else if ast.element_type(current) == IMPORT_DIRECTIVE {
             let text = ast.text(current);

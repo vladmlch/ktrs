@@ -65,7 +65,7 @@ impl RuleV2 for ChainWrappingRule {
             }
             let next_leaf = ast.next_code_leaf(node).and_then(|it| ast.prev_leaf(it));
             if ast.is_white_space_with_newline(next_leaf) && !is_elvis_operator_and_comment(ast, node) {
-                let message = format!("Line must not end with \"{}\"", ast.text(node));
+                let message = format!("Line must not end with \"{}\"", ast.leaf_text(node));
                 let indent_config = &self.indent_config;
                 emit(ast, ast.start_offset(node), &message, true).if_autocorrect_allowed(|| {
                     // <prevLeaf><node="."><nextLeaf="\n"> becomes <prevLeaf><nextLeaf="\n"><node=".">
@@ -94,7 +94,7 @@ impl RuleV2 for ChainWrappingRule {
             }
 
             if let Some(prev_leaf) = prev_leaf.filter(|&it| ast.is_white_space_with_newline(it)) {
-                let message = format!("Line must not begin with \"{}\"", ast.text(node));
+                let message = format!("Line must not begin with \"{}\"", ast.leaf_text(node));
                 emit(ast, ast.start_offset(node), &message, true).if_autocorrect_allowed(|| {
                     // <insertionPoint><prevLeaf="\n"><node="&&"><nextLeaf=" "> becomes
                     // <insertionPoint><space><node="&&"><prevLeaf="\n">

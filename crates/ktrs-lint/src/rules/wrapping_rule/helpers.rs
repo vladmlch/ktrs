@@ -9,9 +9,8 @@ use super::WrappingRule;
 use crate::ast_node_extension::{AstNodeExtension, AstNodeLines};
 use crate::rule::Emit;
 
-/// `KtStringTemplateExpression.isMultiLine()`.
 pub(super) fn is_multi_line(ast: &Ast, node: NodeId) -> bool {
-    ast.children(node).any(|child| ast.element_type(child) == LITERAL_STRING_TEMPLATE_ENTRY && ast.text(child) == "\n")
+    ast.children(node).any(|child| ast.element_type(child) == LITERAL_STRING_TEMPLATE_ENTRY && ast.text_matches(child, "\n"))
 }
 
 pub(super) fn has_line_break(ast: &Ast, node: NodeId, ignore_element_types: &[SyntaxKind]) -> bool {

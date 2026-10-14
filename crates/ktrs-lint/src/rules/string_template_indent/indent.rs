@@ -78,8 +78,8 @@ fn check_and_fix_new_line_after_opening_quotes(ast: &mut Ast, node: NodeId, inde
     let Some(first_node_after_opening_quotes) = ast.find_child_by_type(node, OPEN_QUOTE).and_then(|it| ast.next_leaf(it)) else {
         return;
     };
-    let text = ast.text(first_node_after_opening_quotes);
-    if !is_kotlin_blank(&text) {
+    let text = ast.leaf_text(first_node_after_opening_quotes);
+    if !is_kotlin_blank(text) {
         let offset = ast.start_offset(first_node_after_opening_quotes) + text.len();
         emit(ast, offset, "Missing newline after the opening quotes of the raw string literal", true).if_autocorrect_allowed(|| {
             let leaf = ast.new_leaf(REGULAR_STRING_PART, &format!("\n{indent}"));
@@ -105,8 +105,8 @@ fn check_and_fix_new_line_before_closing_quotes(ast: &mut Ast, node: NodeId, ind
     let Some(last_node_before_closing_quotes) = ast.prev_leaf(last_child_node) else {
         return;
     };
-    let text = ast.text(last_node_before_closing_quotes);
-    if !is_kotlin_blank(&text) {
+    let text = ast.leaf_text(last_node_before_closing_quotes);
+    if !is_kotlin_blank(text) {
         let offset = ast.start_offset(last_node_before_closing_quotes) + text.len();
         emit(ast, offset, "Missing newline before the closing quotes of the raw string literal", true).if_autocorrect_allowed(|| {
             let leaf = ast.new_leaf(REGULAR_STRING_PART, &format!("\n{indent}"));

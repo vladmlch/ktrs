@@ -10,7 +10,7 @@ mod string_template_indenter;
 mod visit_declarations;
 mod visit_expressions;
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use ktrs_ast::{Ast, NodeId};
 use ktrs_editorconfig::PropertyType;
@@ -59,6 +59,7 @@ pub static INDENT_WHEN_ARROW_ON_NEW_LINE: LazyLock<EditorConfigProperty<bool>> =
 pub struct IndentationRule {
     code_style: CodeStyleValue,
     indent_config: IndentConfig,
+    cached_indent: Arc<str>,
     indent_when_arrow_on_new_line: bool,
     indent_context_stack: Vec<IndentContext>,
     string_template_indenter: Option<StringTemplateIndenter>,
@@ -71,6 +72,7 @@ impl IndentationRule {
         IndentationRule {
             code_style: CODE_STYLE_PROPERTY.default_value,
             indent_config: IndentConfig::default_indent_config(),
+            cached_indent: Arc::from(""),
             indent_when_arrow_on_new_line: INDENT_WHEN_ARROW_ON_NEW_LINE.default_value,
             indent_context_stack: Vec::new(),
             string_template_indenter: None,
@@ -126,6 +128,7 @@ impl RuleV2 for IndentationRule {
     fn before_first_node(&mut self, editor_config: &EditorConfig) {
         self.code_style = editor_config.get(&CODE_STYLE_PROPERTY);
         self.indent_config = IndentConfig::new(editor_config.get(&INDENT_STYLE_PROPERTY), editor_config.get(&INDENT_SIZE_PROPERTY));
+        self.cached_indent = Arc::from(self.indent_config.indent.as_str());
         if self.indent_config.disabled() {
             self.traversal.stop_traversal_of_ast();
         }
@@ -292,13 +295,13 @@ struct IndentContext {
     /// The node at which the indent context ends.
     to_ast_node: NodeId,
     /// Cumulative indentation for the node.
-    node_indent: String,
+    node_indent: Arc<str>,
     /// Additional indentation for the first child node.
-    first_child_indent: String,
+    first_child_indent: Arc<str>,
     /// Additional indentation for child nodes.
-    child_indent: String,
+    child_indent: Arc<str>,
     /// Additional indentation for the last child node.
-    last_child_indent: String,
+    last_child_indent: Arc<str>,
     /// True when the indentation level of this context is activated
     activated: bool,
     /// (element type, is leaf) of `from_ast_node` and `to_ast_node`: `afterLastNode`'s exception prints them via
@@ -324,8 +327,13 @@ impl IndentContext {
         [from_ast_node, to_ast_node].map(|it| (ast.element_type(it), ast.is_leaf_element(it)))
     }
 
+    #[allow(dead_code)]
     fn indent(&self) -> String {
-        if self.activated { format!("{}{}", self.node_indent, self.child_indent) } else { self.node_indent.clone() }
+        if self.activated { format!("{}{}", self.node_indent, self.child_indent) } else { self.node_indent.to_string() }
+    }
+
+    pub(crate) fn indent_arc(&self) -> Arc<str> {
+        if self.activated { format!("{}{}", self.node_indent, self.child_indent).into() } else { self.node_indent.clone() }
     }
 }
 
@@ -345,10 +353,10 @@ impl StartedIndentContext {
 #[derive(Default)]
 struct Args {
     to_ast_node: Option<NodeId>,
-    node_indent: Option<String>,
-    child_indent: Option<String>,
-    first_child_indent: Option<String>,
-    last_child_indent: Option<String>,
+    node_indent: Option<Arc<str>>,
+    child_indent: Option<Arc<str>>,
+    first_child_indent: Option<Arc<str>>,
+    last_child_indent: Option<Arc<str>>,
     activated: bool,
 }
 
@@ -358,22 +366,22 @@ impl Args {
         self
     }
 
-    fn node_indent(mut self, node_indent: impl Into<String>) -> Args {
+    fn node_indent(mut self, node_indent: impl Into<Arc<str>>) -> Args {
         self.node_indent = Some(node_indent.into());
         self
     }
 
-    fn child_indent(mut self, child_indent: impl Into<String>) -> Args {
+    fn child_indent(mut self, child_indent: impl Into<Arc<str>>) -> Args {
         self.child_indent = Some(child_indent.into());
         self
     }
 
-    fn first_child_indent(mut self, first_child_indent: impl Into<String>) -> Args {
+    fn first_child_indent(mut self, first_child_indent: impl Into<Arc<str>>) -> Args {
         self.first_child_indent = Some(first_child_indent.into());
         self
     }
 
-    fn last_child_indent(mut self, last_child_indent: impl Into<String>) -> Args {
+    fn last_child_indent(mut self, last_child_indent: impl Into<Arc<str>>) -> Args {
         self.last_child_indent = Some(last_child_indent.into());
         self
     }

@@ -9,7 +9,7 @@ use ktrs_lint::editorconfig::{
     CODE_STYLE_PROPERTY, EXPERIMENTAL_RULES_EXECUTION_PROPERTY, KtlintVersion as EngineVersion, PropertyRef, with_ktlint_version,
 };
 use ktrs_lint::engine::ktlint_rule_engine::EngineWarnings;
-use ktrs_lint::engine::{EditorConfigPropertyRegistry, KtlintSuppression};
+use ktrs_lint::engine::{EditorConfigPropertyRegistry, KtlintSuppression, THREAD_SAFE_EDITOR_CONFIG_CACHE};
 use ktrs_lint::rules::standard_rule_providers;
 use ktrs_lint::{AutocorrectDecision, Code, EditorConfigDefaults, EditorConfigOverride, KtLintException, KtLintRuleEngine, LintError};
 use ktrs_project::{KtlintConfig, KtlintVersion};
@@ -53,14 +53,17 @@ impl KtlintEngines {
     }
 
     /// Re-reads a changed `.editorconfig` in ktlint's (process-wide) cache, or drops the cache when `path` was
-    /// created or deleted (the cache may hold its absence).
+    /// created or deleted (the cache may hold its absence). Every engine keeps its own memoized directory
+    /// chains, so all engines are cleared, not just the first.
     pub(crate) fn editor_config_changed(&self, path: &Path, created_or_deleted: bool) -> Result<(), String> {
-        let Some((_, engine)) = self.engines.first() else { return Ok(()) };
+        for (_, engine) in &self.engines {
+            engine.clear_dir_chains();
+        }
         if created_or_deleted {
-            engine.trim_memory();
+            THREAD_SAFE_EDITOR_CONFIG_CACHE.clear();
             Ok(())
         } else {
-            engine.reload_editor_config_file(path).map_err(|e| e.to_string())
+            THREAD_SAFE_EDITOR_CONFIG_CACHE.reload_if_exists(path).map_err(|e| e.to_string())
         }
     }
 }
@@ -170,3 +173,68 @@ fn guarded<T>(code: &Code, run: impl FnOnce() -> Result<T, KtLintException>) -> 
 fn internal_error(code: &Code) -> Failure {
     Failure::Other(format!("internal error in ktrs (please report it with this file): {}", code.file_path_or_stdin()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn editor_config_changed_clears_all_engines_dir_chains_even_on_error() {
+        let warnings: EngineWarnings = Arc::new(|_, _| {});
+        let mut engines = KtlintEngines::new(warnings);
+        let config1 = KtlintConfig {
+            version: KtlintVersion::V2_0,
+            android: None,
+            experimental: None,
+            editorconfig_overrides: Vec::new(),
+            rule_sets: Vec::new(),
+        };
+        let config2 = KtlintConfig {
+            version: KtlintVersion::V2_0,
+            android: Some(true),
+            experimental: None,
+            editorconfig_overrides: Vec::new(),
+            rule_sets: Vec::new(),
+        };
+        let mut warn = |_| {};
+        engines.get_or_build(&config1, &mut warn);
+        engines.get_or_build(&config2, &mut warn);
+        assert_eq!(engines.engines.len(), 2);
+
+        // Created or deleted clears cache and engines' dir chains
+        let result = engines.editor_config_changed(Path::new("/dummy/.editorconfig"), true);
+        assert!(result.is_ok());
+
+        // Test actual error condition with populated dir_chains:
+        let temp_dir = std::env::temp_dir().join(format!("ktrs_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let ec_path = temp_dir.join(".editorconfig");
+        std::fs::write(&ec_path, "root = true\n[*]\nindent_size = 4\n").unwrap();
+
+        let kt_file = temp_dir.join("Test.kt");
+        std::fs::write(&kt_file, "val x = 1\n").unwrap();
+        let code = Code::from_file(&kt_file).unwrap();
+
+        // Run lint on both engines so their dir_chains are populated
+        for (_, engine) in &engines.engines {
+            let _ = engine.lint(&code, &mut |_| {});
+            assert_eq!(engine.dir_chains_len(), 1);
+        }
+
+        // Overwrite .editorconfig with invalid syntax
+        std::fs::write(&ec_path, "[invalid section unclosed\nindent_size = 4\n").unwrap();
+
+        // Calling editor_config_changed on modified file must fail with ParseException
+        let result = engines.editor_config_changed(&ec_path, false);
+        assert!(result.is_err(), "reload must report parse error");
+
+        // Despite the error, ALL engines must have had their dir_chains cleared
+        for (_, engine) in &engines.engines {
+            assert_eq!(engine.dir_chains_len(), 0, "dir_chains must be empty on all engines");
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}
+

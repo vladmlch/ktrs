@@ -97,7 +97,7 @@ fn visit_block(indent_config: &IndentConfig, ast: &mut Ast, node: NodeId, emit: 
 
 fn visit_clause(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
     let prev_leaf = ast.prev_leaf_matching(node, |it| !ast.is_part_of_comment(it)).expect("NullPointerException: prevLeaf!!");
-    if ast.text(prev_leaf) != " " {
+    if !ast.text_matches(prev_leaf, " ") {
         let message = format!("A single space is required before '{}'", element_type_name(ast, node));
         emit(ast, ast.start_offset(node), &message, true).if_autocorrect_allowed(|| ast.upsert_whitespace_before_me(node, " "));
     }

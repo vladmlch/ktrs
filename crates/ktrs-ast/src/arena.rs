@@ -30,13 +30,15 @@ pub(crate) struct Node {
     pub(crate) surplus: u32,
     /// `\n` count of the text, kept like `len`: `textContains('\n')` without a walk.
     pub(crate) newlines: u32,
-    /// Java `String.hashCode()` of the text, lazily filled. A cached node's hash is current and an
-    /// uncached node's ancestors are uncached: every link change clears its parent chain.
-    pub(crate) text_hash: Cell<Option<u32>>,
+    /// Java `String.hashCode()` of the text, lazily filled; `u32::MAX` = not computed. A cached node's
+    /// hash is current and an uncached node's ancestors are uncached: every link change clears its parent chain.
+    pub(crate) text_hash: Cell<u32>,
     /// `myStartOffsetInParent`, lazily filled; `NONE` = not computed. The valid entries of a child
     /// list are always a prefix of it, as in IntelliJ.
     pub(crate) offset_in_parent: Cell<u32>,
 }
+
+const _: () = assert!(std::mem::size_of::<Node>() == 48);
 
 /// The arena. Navigation takes `&self` and never allocates; edits take `&mut self`.
 #[derive(Debug)]
@@ -90,6 +92,7 @@ impl Ast {
         self.ascii &= ascii;
         let mut error = self.errors.len() as u32;
         self.errors.extend(parse.error_messages.iter().cloned());
+        let mut last_leaf_id = NONE;
         for e in 0..tree.len() as u32 {
             let id = base + e;
             let range = tree.text_range(e);
@@ -108,31 +111,37 @@ impl Ast {
                 None => (NONE, NONE),
             };
             let prev = tree.prev_sibling(e).map_or(NONE, |p| base + p);
+            let (surplus, newlines) = if flags == LEAF {
+                let text = &tree.text()[range];
+                (if ascii { 0 } else { utf16_surplus(text) }, newline_count(text))
+            } else {
+                (0, 0)
+            };
+            let (first, last) = if flags == LEAF {
+                (last_leaf_id, NONE)
+            } else {
+                (NONE, NONE)
+            };
             self.nodes.push(Node {
                 kind,
                 flags,
                 parent,
-                first: NONE,
-                last: NONE,
+                first,
+                last,
                 prev,
                 next: NONE,
                 data,
                 len: range.len().into(),
-                surplus: 0,
-                newlines: 0,
-                text_hash: Cell::new(None),
+                surplus,
+                newlines,
+                text_hash: Cell::new(NONE),
                 offset_in_parent: Cell::new(offset),
             });
             if flags == LEAF {
-                let text = &tree.text()[range];
-                let (surplus, newlines) = (if ascii { 0 } else { utf16_surplus(text) }, newline_count(text));
-                let mut n = id;
-                while (surplus != 0 || newlines != 0) && n != NONE {
-                    let node = &mut self.nodes[n as usize];
-                    node.surplus += surplus;
-                    node.newlines += newlines;
-                    n = node.parent;
+                if last_leaf_id != NONE {
+                    self.nodes[last_leaf_id as usize].last = id;
                 }
+                last_leaf_id = id;
             }
             if prev != NONE {
                 self.nodes[prev as usize].next = id;
@@ -141,6 +150,15 @@ impl Ast {
             }
             if parent != NONE {
                 self.nodes[parent as usize].last = id;
+            }
+        }
+        for e in (base as usize + 1..self.nodes.len()).rev() {
+            let parent = self.nodes[e].parent;
+            if parent != NONE {
+                let surplus = self.nodes[e].surplus;
+                let newlines = self.nodes[e].newlines;
+                self.nodes[parent as usize].surplus += surplus;
+                self.nodes[parent as usize].newlines += newlines;
             }
         }
         let root = &mut self.nodes[base as usize];
@@ -210,11 +228,49 @@ impl Ast {
     }
 
     pub fn first_child_node(&self, n: NodeId) -> Option<NodeId> {
-        opt(self.node(n).first)
+        if self.is_leaf_element(n) {
+            None
+        } else {
+            opt(self.node(n).first)
+        }
     }
 
     pub fn last_child_node(&self, n: NodeId) -> Option<NodeId> {
-        opt(self.node(n).last)
+        if self.is_leaf_element(n) {
+            None
+        } else {
+            opt(self.node(n).last)
+        }
+    }
+
+    #[inline]
+    pub fn leaf_prev(&self, n: NodeId) -> Option<NodeId> {
+        if self.is_leaf_element(n) {
+            opt(self.node(n).first)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn leaf_next(&self, n: NodeId) -> Option<NodeId> {
+        if self.is_leaf_element(n) {
+            opt(self.node(n).last)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub(crate) fn set_leaf_prev(&mut self, n: NodeId, prev: u32) {
+        debug_assert!(self.is_leaf_element(n));
+        self.node_mut(n).first = prev;
+    }
+
+    #[inline]
+    pub(crate) fn set_leaf_next(&mut self, n: NodeId, next: u32) {
+        debug_assert!(self.is_leaf_element(n));
+        self.node_mut(n).last = next;
     }
 
     /// `node instanceof LeafElement` (a composite without children is not a leaf).
@@ -229,6 +285,10 @@ impl Ast {
 
     pub fn text_length(&self, n: NodeId) -> usize {
         self.node(n).len as usize
+    }
+
+    pub fn newline_count(&self, n: NodeId) -> u32 {
+        self.node(n).newlines
     }
 
     /// A leaf's text (`LeafElement.getChars`). Panics on a composite.
@@ -292,7 +352,7 @@ impl Ast {
             len,
             surplus,
             newlines,
-            text_hash: Cell::new(None),
+            text_hash: Cell::new(NONE),
             offset_in_parent: Cell::new(NONE),
         });
         id

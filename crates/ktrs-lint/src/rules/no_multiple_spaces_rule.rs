@@ -26,7 +26,10 @@ impl RuleV2 for NoMultipleSpacesRule {
     }
 
     fn before_visit_child_nodes(&mut self, ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
-        if !ast.is_white_space(node) || is_possible_alignment_of_kdoc_tag(ast, node) {
+        if !ast.is_white_space(node) || ast.text_length(node) <= 1 {
+            return;
+        }
+        if is_possible_alignment_of_kdoc_tag(ast, node) {
             return;
         }
         let text = ast.leaf_text(node);

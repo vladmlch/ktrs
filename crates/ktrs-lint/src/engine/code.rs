@@ -37,10 +37,13 @@ impl Code {
     /// `Code.fromFile(file)`: `readText()` decodes UTF-8, replacing malformed input.
     pub fn from_file(file: &Path) -> std::io::Result<Code> {
         let bytes = std::fs::read(file)?;
-        Ok(Code::from_file_content(
-            file,
-            String::from_utf8_lossy(&bytes).into_owned(),
-        ))
+        // A valid file moves into the `String` without copying; malformed input is replaced as
+        // `from_utf8_lossy` does (on the same bytes `as_bytes` returns).
+        let content = match String::from_utf8(bytes) {
+            Ok(content) => content,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
+        Ok(Code::from_file_content(file, content))
     }
 
     /// [`Code::from_file`] with the content already read.
@@ -85,10 +88,18 @@ impl Code {
     pub fn from_stdin() -> std::io::Result<Code> {
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut std::io::stdin(), &mut bytes)?;
-        Ok(Code::from_snippet_with_path(
-            &String::from_utf8_lossy(&bytes),
-            None,
-        ))
+        let content = match String::from_utf8(bytes) {
+            Ok(content) => content,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
+        // `Code::from_snippet_with_path(&content, None)`, without copying `content` again.
+        Ok(Code {
+            content,
+            file_name: None,
+            file_path: None,
+            script: false,
+            is_std_in: true,
+        })
     }
 
     /// The file name the PSI file gets: the path, or `File.kt`/`File.kts`.

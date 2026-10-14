@@ -2,7 +2,7 @@
 
 use ktrs_ast::{Ast, NodeId};
 use ktrs_parser::token_set::TokenSet;
-use ktrs_syntax::SyntaxKind::{GT, RBRACKET, RPAR};
+use ktrs_syntax::SyntaxKind::{COMMA, GT, RBRACKET, RPAR};
 
 use crate::ast_node_edit::AstNodeEdit;
 use crate::ast_node_extension::AstNodeExtension;
@@ -10,6 +10,7 @@ use crate::rule::{About, Emit, RuleId, RuleV2};
 use crate::rules::STANDARD_RULE_ABOUT;
 
 const R_TOKEN_SET: TokenSet = TokenSet::create(&[RPAR, RBRACKET, GT]);
+const VISITED_TYPES: TokenSet = TokenSet::create(&[COMMA]);
 
 pub struct SpacingAroundCommaRule;
 
@@ -18,12 +19,16 @@ impl RuleV2 for SpacingAroundCommaRule {
         RuleId("standard:comma-spacing")
     }
 
+    fn visited_types(&self) -> Option<TokenSet> {
+        Some(VISITED_TYPES)
+    }
+
     fn about(&self) -> About {
         STANDARD_RULE_ABOUT
     }
 
     fn before_visit_child_nodes(&mut self, ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
-        if ast.is_leaf_element(node) && ast.text_matches(node, ",") && !ast.is_part_of_string(node) {
+        if ast.element_type(node) == COMMA && ast.is_leaf_element(node) && !ast.is_part_of_string(node) {
             if let Some(prev_leaf) = ast.prev_leaf(node).filter(|&it| ast.is_white_space(it)) {
                 let message = format!("Unexpected spacing before \"{}\"", ast.text(node));
                 emit(ast, ast.start_offset(prev_leaf), &message, true).if_autocorrect_allowed(|| {

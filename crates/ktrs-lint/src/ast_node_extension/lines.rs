@@ -115,17 +115,56 @@ impl AstNodeLines for Ast {
         // Streams `joinToString("").trimStart('\n').substringBefore('\n').length` without building the text.
         let (mut leading, mut length) = (true, 0);
         for leaf in leaves {
-            for c in self.text_chunks(leaf).flat_map(str::chars) {
-                match c {
-                    '\n' if leading => {}
-                    '\n' => return length,
-                    _ => {
-                        leading = false;
-                        length += c.len_utf16();
+            if !leading && self.newline_count(leaf) == 0 {
+                length += self.text_length_utf16(leaf);
+                continue;
+            }
+            if leading && self.newline_count(leaf) == 0 {
+                if self.text_length(leaf) > 0 {
+                    leading = false;
+                    length += self.text_length_utf16(leaf);
+                }
+                continue;
+            }
+            let process_chunk = |chunk: &str, leading: &mut bool, length: &mut usize| -> Option<usize> {
+                if *leading {
+                    let trimmed = chunk.trim_start_matches('\n');
+                    if trimmed.is_empty() {
+                        return None;
+                    }
+                    *leading = false;
+                    if let Some(pos) = trimmed.find('\n') {
+                        return Some(*length + utf16_len(&trimmed[..pos]));
+                    }
+                    *length += utf16_len(trimmed);
+                } else if let Some(pos) = chunk.find('\n') {
+                    return Some(*length + utf16_len(&chunk[..pos]));
+                } else {
+                    *length += utf16_len(chunk);
+                }
+                None
+            };
+            if self.is_leaf_element(leaf) {
+                if let Some(res) = process_chunk(self.leaf_text(leaf), &mut leading, &mut length) {
+                    return res;
+                }
+            } else {
+                for chunk in self.text_chunks(leaf) {
+                    if let Some(res) = process_chunk(chunk, &mut leading, &mut length) {
+                        return res;
                     }
                 }
             }
         }
         length
+    }
+}
+
+#[inline]
+fn utf16_len(s: &str) -> usize {
+    if s.is_ascii() {
+        s.len()
+    } else {
+        s.encode_utf16().count()
     }
 }

@@ -1,30 +1,46 @@
 //! Port of ktlint-rule-engine `PositionInTextLocator.kt`. Offsets are UTF-16 units, as on the JVM.
 
-/// `buildPositionInTextLocator(text)`: segment `i` spans `[starts[i], starts[i + 1] - 1]`.
-pub struct PositionInTextLocator {
-    starts: Vec<usize>,
+use std::borrow::Cow;
+use std::cell::OnceCell;
+
+/// `buildPositionInTextLocator(text)`: segment `i` spans `[starts[i], starts[i + 1] - 1]`. The text is
+/// kept because the table is built lazily, on the first `locate`: a run that emits no error (most
+/// format runs) never scans the whole text.
+pub struct PositionInTextLocator<'a> {
+    text: Cow<'a, str>,
+    starts: OnceCell<Box<[usize]>>,
 }
 
-impl PositionInTextLocator {
-    pub fn new(text: &str) -> PositionInTextLocator {
-        let mut starts = vec![0];
-        let mut units = 0;
-        for c in text.chars() {
-            units += c.len_utf16();
-            if c == '\n' {
-                starts.push(units);
-            }
+impl<'a> PositionInTextLocator<'a> {
+    pub fn new(text: impl Into<Cow<'a, str>>) -> PositionInTextLocator<'a> {
+        PositionInTextLocator {
+            text: text.into(),
+            starts: OnceCell::new(),
         }
-        let text_length = units;
-        let last = *starts.last().unwrap();
-        starts.push(text_length + usize::from(last == text_length));
-        PositionInTextLocator { starts }
+    }
+
+    fn starts(&self) -> &[usize] {
+        self.starts.get_or_init(|| {
+            let mut starts = vec![0];
+            let mut units = 0;
+            for c in self.text.chars() {
+                units += c.len_utf16();
+                if c == '\n' {
+                    starts.push(units);
+                }
+            }
+            let text_length = units;
+            let last = *starts.last().unwrap();
+            starts.push(text_length + usize::from(last == text_length));
+            starts.into_boxed_slice()
+        })
     }
 
     /// `(line, col)`, both 1-based; `(1, 1)` for an offset past the last segment (`SegmentTree.indexOf == -1`).
     pub fn locate(&self, offset: usize) -> (usize, usize) {
-        let segments = &self.starts[..self.starts.len() - 1];
-        if offset >= *self.starts.last().unwrap() {
+        let starts = self.starts();
+        let segments = &starts[..starts.len() - 1];
+        if offset >= *starts.last().unwrap() {
             return (1, 1);
         }
         let line = segments.partition_point(|&start| start <= offset) - 1;
@@ -45,5 +61,14 @@ mod tests {
         assert_eq!(l.locate(3), (2, 1));
         let l = PositionInTextLocator::new("é\nx");
         assert_eq!(l.locate(2), (2, 1), "UTF-16 units");
+    }
+
+    #[test]
+    fn borrowed_cow_preserves_borrow() {
+        use std::borrow::Cow;
+        let text = "hello\nworld";
+        let l = PositionInTextLocator::new(Cow::Borrowed(text));
+        assert!(matches!(l.text, Cow::Borrowed(_)));
+        assert_eq!(l.locate(6), (2, 1));
     }
 }

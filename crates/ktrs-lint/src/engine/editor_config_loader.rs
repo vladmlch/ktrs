@@ -1,10 +1,13 @@
 //! Port of ktlint-rule-engine `internal/EditorConfigLoader.kt` (with `EditorConfigLoaderEc4j`).
 
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use ktrs_editorconfig::property_type::TAB_WIDTH;
 use ktrs_editorconfig::{
-    AnyPropertyType, ParseException, Property, PropertyTypeRegistry, ResourcePropertiesService,
+    AnyPropertyType, EditorConfig as Ec4jEditorConfig, ParseException, Property,
+    PropertyTypeRegistry, ResourcePropertiesService,
 };
 
 use crate::editorconfig::{
@@ -23,6 +26,7 @@ use crate::engine::formatter_tags::{
 pub const SUPPORTED_FILES: [&str; 2] = [".kt", ".kts"];
 
 const TAB_WIDTH_PROPERTY_NAME: &str = "tab_width";
+const DIR_CHAINS_CAPACITY: usize = 512;
 
 /// `EditorConfigLoaderEc4j`: ec4j's loader, aware of the standard types plus those of the rules.
 #[derive(Clone, Debug)]
@@ -42,11 +46,52 @@ impl EditorConfigLoaderEc4j {
     }
 }
 
+/// The `.editorconfig` chain `ResourcePropertiesService::discover_chain` walks from a file in a
+/// directory: `(dir, config)` pairs, nearest first.
+type DirChain = Vec<(PathBuf, Arc<Ec4jEditorConfig>)>;
+
+#[derive(Clone, Debug, Default)]
+struct DirChains {
+    map: HashMap<PathBuf, Arc<DirChain>>,
+    order: VecDeque<PathBuf>,
+}
+
+impl DirChains {
+    fn get(&self, dir: &Path) -> Option<Arc<DirChain>> {
+        self.map.get(dir).cloned()
+    }
+
+    fn insert(&mut self, dir: PathBuf, chain: Arc<DirChain>) {
+        if self.map.contains_key(&dir) {
+            self.map.insert(dir, chain);
+            return;
+        }
+        while self.map.len() >= DIR_CHAINS_CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        self.order.push_back(dir.clone());
+        self.map.insert(dir, chain);
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EditorConfigLoader {
     editor_config_loader_ec4j: EditorConfigLoaderEc4j,
     editor_config_defaults: EditorConfigDefaults,
     editor_config_override: EditorConfigOverride,
+    /// `discover_chain` results by the directory the walk starts at: the walk's `exists` stats and cache
+    /// lookups are identical for every file in a directory, so it runs once per directory per loader.
+    /// Bounded to `DIR_CHAINS_CAPACITY` with FIFO eviction to prevent unbounded memory growth.
+    dir_chains: Arc<Mutex<DirChains>>,
 }
 
 impl EditorConfigLoader {
@@ -59,6 +104,7 @@ impl EditorConfigLoader {
             editor_config_loader_ec4j,
             editor_config_defaults,
             editor_config_override,
+            dir_chains: Arc::new(Mutex::new(DirChains::default())),
         }
     }
 
@@ -69,9 +115,10 @@ impl EditorConfigLoader {
             Some(path) => to_absolute_path(path),
             None => default_file_path(),
         };
-        let mut properties = self
-            .create_resource_properties_service()
-            .query_properties(&editor_config_path)?
+        let service = self.create_resource_properties_service();
+        let chain = self.dir_chain(&editor_config_path, &service)?;
+        let mut properties = service
+            .apply_chain(&editor_config_path, &chain)
             .into_properties();
         let source = |properties: &[Property], name: &str| {
             properties
@@ -113,6 +160,33 @@ impl EditorConfigLoader {
                 PropertyRef::from(&*FORMATTER_TAG_ON_ENABLED_PROPERTY),
             ]),
         )
+    }
+
+    /// The `discover_chain` walk's result for `resource`, memoized on `resource`'s directory: the walk
+    /// (the `exists` stats, `cache` lookups and `root` checks) is the same for every file in it. Errors
+    /// are not memoized (the Java cache throws before the put too).
+    fn dir_chain(
+        &self,
+        resource: &Path,
+        service: &ResourcePropertiesService<'_>,
+    ) -> Result<Arc<DirChain>, ParseException> {
+        let dir = resource.parent().map(Path::to_path_buf).unwrap_or_default();
+        if let Some(chain) = self.dir_chains.lock().unwrap().get(&dir) {
+            return Ok(chain);
+        }
+        let chain = Arc::new(service.discover_chain(resource)?);
+        self.dir_chains.lock().unwrap().insert(dir, chain.clone());
+        Ok(chain)
+    }
+
+    /// Drops the memoized chains, which keep the `Arc<EditorConfig>` the cache returned when the walk
+    /// ran: `KtLintRuleEngine::trim_memory`/`reload_editor_config_file` clear them with the cache.
+    pub fn clear_dir_chains(&self) {
+        self.dir_chains.lock().unwrap().clear();
+    }
+
+    pub fn dir_chains_len(&self) -> usize {
+        self.dir_chains.lock().unwrap().map.len()
     }
 
     fn create_resource_properties_service(&self) -> ResourcePropertiesService<'_> {

@@ -1,11 +1,9 @@
-//! Which rules a traversal calls `before_visit_child_nodes` on, per element type: built on first use of a type,
-//! in rule order, so a node walks only its own rules instead of testing every rule's `visited_types`.
+//! Which rules a traversal calls `before_visit_child_nodes` on, per element type: precomputed in
+//! rule order, so a node walks only its own rules instead of testing every rule's `visited_types`.
 
 use ktrs_syntax::SyntaxKind;
 
 use crate::rule::TokenSet;
-
-const UNBUILT: (u32, u32) = (u32::MAX, 0);
 
 pub(crate) struct RuleDispatch {
     /// Per element type: the `(start, len)` of its rule indices in `indices`.
@@ -16,38 +14,42 @@ pub(crate) struct RuleDispatch {
 }
 
 impl RuleDispatch {
-    /// One flat buffer for every type's list, so a traversal allocates a fixed few times, not once per type.
-    pub(crate) fn new(visits_after: impl ExactSizeIterator<Item = bool>) -> RuleDispatch {
-        let rule_count = visits_after.len();
+    /// Precomputes dispatch for all syntax kinds once for the given rules.
+    pub(crate) fn build(rules: impl IntoIterator<Item = (Option<TokenSet>, bool)>) -> RuleDispatch {
+        let rules: Vec<(Option<TokenSet>, bool)> = rules.into_iter().collect();
+        let rule_count = rules.len();
+        let mut spans = vec![(0u32, 0u32); SyntaxKind::DUMMY_HOLDER as usize + 1];
+        let mut indices = Vec::with_capacity(rule_count * 32);
+        let after: Vec<u16> = rules
+            .iter()
+            .enumerate()
+            .filter(|&(_, &(_, visits_after))| visits_after)
+            .map(|(i, _)| i as u16)
+            .collect();
+
+        for raw in 0..=SyntaxKind::DUMMY_HOLDER as u16 {
+            let kind = SyntaxKind::from_raw(raw);
+            let start = indices.len();
+            for (i, &(visited_types, _)) in rules.iter().enumerate() {
+                if visited_types.is_none_or(|types| types.contains(kind)) {
+                    indices.push(i as u16);
+                }
+            }
+            spans[raw as usize] = (start as u32, (indices.len() - start) as u32);
+        }
+
+        indices.shrink_to_fit();
         RuleDispatch {
-            spans: vec![UNBUILT; SyntaxKind::DUMMY_HOLDER as usize + 1],
-            indices: Vec::with_capacity(rule_count * 32),
-            after: visits_after.enumerate().filter(|&(_, after)| after).map(|(i, _)| i as u16).collect(),
+            spans,
+            indices,
+            after,
         }
     }
 
-    /// The indices of the rules whose `visited_types` (all of them, with `all`) include `kind`.
-    pub(crate) fn rules_for(
-        &mut self,
-        kind: SyntaxKind,
-        visited_types: impl Iterator<Item = Option<TokenSet>>,
-        all: bool,
-    ) -> (usize, usize) {
-        let span = &mut self.spans[kind as usize];
-        if *span == UNBUILT {
-            let start = self.indices.len();
-            self.indices.extend(
-                visited_types
-                    .enumerate()
-                    .filter(|(_, types)| all || types.is_none_or(|t| t.contains(kind)))
-                    .map(|(i, _)| i as u16),
-            );
-            *span = (start as u32, (self.indices.len() - start) as u32);
-        }
-        (span.0 as usize, span.1 as usize)
-    }
-
-    pub(crate) fn rule_at(&self, position: usize) -> usize {
-        usize::from(self.indices[position])
+    /// The indices of the rules whose `visited_types` include `kind`.
+    #[inline]
+    pub(crate) fn rules_for(&self, kind: SyntaxKind) -> &[u16] {
+        let (start, len) = self.spans[kind as usize];
+        &self.indices[start as usize..(start + len) as usize]
     }
 }

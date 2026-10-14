@@ -136,6 +136,10 @@ impl RuleV2 for NoUnusedImportsRule {
         true
     }
 
+    fn visited_after_types(&self) -> Option<TokenSet> {
+        Some(TokenSet::create(&[FILE]))
+    }
+
     fn after_visit_child_nodes(&mut self, ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
         if ast.element_type(node) != FILE {
             return;
@@ -164,11 +168,13 @@ impl RuleV2 for NoUnusedImportsRule {
         }
 
         let referenced: HashSet<&str> = self.r#ref.iter().flatten().map(String::as_str).collect();
+        let valid_import_paths: HashSet<&str> = self.import_paths.iter().map(String::as_str).collect();
         for &(_, node) in &self.imports {
             let import_directive = KtImportDirective::of(ast, node);
             let path = import_directive.import_path(ast);
             let name = path.as_ref().and_then(ImportPath::imported_name).map(|it| remove_backticks_and_trim(&it).into_owned());
-            let import_path = remove_backticks_and_trim(&path.expect("NullPointerException: importPath").path_str()).into_owned();
+            let path_str = path.expect("NullPointerException: importPath").path_str();
+            let import_path = remove_backticks_and_trim(&path_str);
             let package_name = &self.package_name;
             if import_directive.alias_name(ast).is_none()
                 && (package_name.is_empty() || import_path.starts_with(&format!("{package_name}.")))
@@ -177,7 +183,7 @@ impl RuleV2 for NoUnusedImportsRule {
                 // Allow imports without alias for which the fully qualified path is equal to the package name
                 // (ktlint#2821: marking an import from the same package led to compile failure).
             } else if name.as_ref().is_some_and(|name| {
-                (!referenced.contains(name.as_str()) || !self.is_a_valid_import(&import_path))
+                (!referenced.contains(name.as_str()) || !valid_import_paths.contains(import_path.as_ref()))
                     && !OPERATOR_SET.contains(&name.as_str())
                     && !is_component_n(name)
                     && !self.ignore_provide_delegate(&import_path)
@@ -269,8 +275,9 @@ impl NoUnusedImportsRule {
     }
 
     /// Whether the import being checked is present in the filtered import list.
+    #[allow(dead_code)]
     fn is_a_valid_import(&self, import_path: &str) -> bool {
-        self.import_paths.iter().any(|it| it.contains(import_path))
+        self.import_paths.iter().any(|it| it == import_path)
     }
 }
 

@@ -138,6 +138,7 @@ impl KtLintRuleEngine {
     ) -> Result<String, KtLintException> {
         let handler = AutocorrectHandler::LintErrorAutocorrectHandler(autocorrect);
         format(self, code, handler, callback, MAX_FORMAT_RUNS_PER_FILE, &mut |_| {})
+            .map(|formatted| formatted.into_owned())
     }
 
     /// `format(code, rerunAfterAutocorrect, callback)`: without rerun, a single pass (for consumers that
@@ -162,6 +163,7 @@ impl KtLintRuleEngine {
             max_format_runs_per_file,
             &mut |_| {},
         )
+        .map(|formatted| formatted.into_owned())
     }
 
     /// [`Self::format`], calling `after_pass` with the tree at the end of every pass (what a last-sorted
@@ -181,6 +183,7 @@ impl KtLintRuleEngine {
             MAX_FORMAT_RUNS_PER_FILE,
             after_pass,
         )
+        .map(|formatted| formatted.into_owned())
     }
 
     /// `transformToAst(code)`: the parsed tree (after the parse-error check and `.editorconfig` load).
@@ -191,6 +194,7 @@ impl KtLintRuleEngine {
     /// `trimMemory()`: drops the cached `.editorconfig` files.
     pub fn trim_memory(&self) {
         THREAD_SAFE_EDITOR_CONFIG_CACHE.clear();
+        self.editor_config_loader.clear_dir_chains();
     }
 
     /// `reloadEditorConfigFile(path)`: re-reads a cached `.editorconfig` file.
@@ -198,6 +202,16 @@ impl KtLintRuleEngine {
         &self,
         path: &Path,
     ) -> Result<(), ktrs_editorconfig::ParseException> {
+        self.editor_config_loader.clear_dir_chains();
         THREAD_SAFE_EDITOR_CONFIG_CACHE.reload_if_exists(path)
+    }
+
+    /// Drops the memoized directory chains for this engine.
+    pub fn clear_dir_chains(&self) {
+        self.editor_config_loader.clear_dir_chains();
+    }
+
+    pub fn dir_chains_len(&self) -> usize {
+        self.editor_config_loader.dir_chains_len()
     }
 }

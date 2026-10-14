@@ -1,5 +1,7 @@
 //! `IndentationRule.kt` from `skipLeadingWhitespaceCommentsAndAnnotations` to `afterLastNode`: the indent context stack.
 
+use std::sync::Arc;
+
 use ktrs_ast::{Ast, NodeId};
 use ktrs_syntax::SyntaxKind::{ANNOTATION_ENTRY, BINARY_EXPRESSION, CONDITION, MODIFIER_LIST, SECONDARY_CONSTRUCTOR, VALUE_PARAMETER};
 
@@ -41,16 +43,20 @@ pub(super) fn is_part_of_binary_expression_wrapped_in_condition(ast: &Ast, node:
 }
 
 impl IndentationRule {
+    pub(super) fn current_indent_arc(&self) -> Arc<str> {
+        self.indent_context_stack.last().expect("NullPointerException: peekLast().indent()").indent_arc()
+    }
+
     pub(super) fn current_indent(&self) -> String {
-        self.indent_context_stack.last().expect("NullPointerException: peekLast().indent()").indent()
+        self.current_indent_arc().to_string()
     }
 
     /// The defaults: `to` = the last leaf of `from`, `node_indent` = [`Self::current_indent`], `child_indent` = one indent,
     /// `first_child_indent` and `last_child_indent` = `child_indent`.
     pub(super) fn start_indent_context(&mut self, ast: &Ast, from_ast_node: NodeId, args: Args) -> StartedIndentContext {
         let to_ast_node = args.to_ast_node.unwrap_or_else(|| ast.last_child_leaf_or_self(from_ast_node));
-        let node_indent = args.node_indent.unwrap_or_else(|| self.current_indent());
-        let child_indent = args.child_indent.unwrap_or_else(|| self.indent_config.indent.clone());
+        let node_indent = args.node_indent.unwrap_or_else(|| self.current_indent_arc());
+        let child_indent = args.child_indent.unwrap_or_else(|| self.cached_indent.clone());
         let first_child_indent = args.first_child_indent.unwrap_or_else(|| child_indent.clone());
         let last_child_indent = args.last_child_indent.unwrap_or_else(|| child_indent.clone());
         self.indent_context_stack.push(IndentContext {
@@ -73,7 +79,7 @@ impl IndentationRule {
                 // When the ktlint indentation violations on child elements have been suppressed, those child elements are not visited,
                 // and the stack is therefore not cleaned up properly. So remove all elements from top of the stack until the start of an
                 // index context is found for the current node.
-                || ast.parent_matching(last.to_ast_node, |it| it == node).is_some();
+                || ast.is_ancestor(node, last.to_ast_node);
             if !ends_here {
                 break;
             }

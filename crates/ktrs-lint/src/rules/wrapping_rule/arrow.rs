@@ -16,7 +16,7 @@ impl WrappingRule {
             .filter(|&it| ast.element_type(it) == STRING_TEMPLATE)
             .filter(|&it| is_multi_line(ast, it))
             .filter(|&it| is_followed_by_trim_indent(ast, it) || is_followed_by_trim_margin(ast, it))
-            .filter(|_| !ast.prev_sibling(node).is_none_or(|it| ast.text(it).chars().all(char::is_whitespace)))
+            .filter(|_| !ast.prev_sibling(node).is_none_or(|it| if ast.is_leaf_element(it) { ast.leaf_text(it).chars().all(char::is_whitespace) } else { ast.text_chunks(it).all(|c| c.chars().all(char::is_whitespace)) }))
             .is_some();
         if applies {
             // rewriting `"""\n    text\n_""".trimIndent()` to `"""\n    text\n_\n""".trimIndent()`
@@ -53,7 +53,8 @@ impl WrappingRule {
     }
 
     pub(super) fn require_newline_before_leaf(&self, ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>, indent: &str) {
-        let message = format!("Missing newline before \"{}\"", ast.text(node));
+        let text = if ast.is_leaf_element(node) { std::borrow::Cow::Borrowed(ast.leaf_text(node)) } else { std::borrow::Cow::Owned(ast.text(node)) };
+        let message = format!("Missing newline before \"{text}\"");
         emit(ast, ast.start_offset(node) - 1, &message, true).if_autocorrect_allowed(|| ast.upsert_whitespace_before_me(node, indent));
     }
 
@@ -66,7 +67,8 @@ impl WrappingRule {
         indent: Option<String>,
     ) {
         let node_to_fix = node_after_which_newline_is_required;
-        let message = format!("Missing newline after \"{}\"", ast.text(node_after_which_newline_is_required));
+        let text = if ast.is_leaf_element(node_to_fix) { std::borrow::Cow::Borrowed(ast.leaf_text(node_to_fix)) } else { std::borrow::Cow::Owned(ast.text(node_to_fix)) };
+        let message = format!("Missing newline after \"{text}\"");
         emit(ast, ast.start_offset(node_after_which_newline_is_required) + 1, &message, true).if_autocorrect_allowed(|| {
             let temp_indent = indent.unwrap_or_else(|| self.indent_config.child_indent_of(ast, node_to_fix));
             ast.upsert_whitespace_after_me(node_to_fix, &temp_indent);

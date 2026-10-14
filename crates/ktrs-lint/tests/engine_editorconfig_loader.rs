@@ -169,3 +169,45 @@ fn should_support_editorconfig_globs_when_loading_properties_for_file_specified_
         ],
     );
 }
+
+#[test]
+fn bounded_dir_chains_eviction_works_across_many_directories() {
+    let fs = TestFileSystem::new();
+    fs.write_root_editor_config_file("root = true\n[*]\nindent_size = 2");
+    let loader = create_editor_config_loader();
+    for i in 0..600 {
+        let file_path = fs.resolve(&format!("dir_{i}/Test.kt"));
+        let actual = loader.load(Some(&file_path)).unwrap();
+        assert_contains(
+            &convert_to_property_values(&actual),
+            &["indent_size = 2"],
+        );
+    }
+    assert_eq!(loader.dir_chains_len(), 512);
+    let file_path = fs.resolve("dir_0/Test.kt");
+    let actual = loader.load(Some(&file_path)).unwrap();
+    assert_contains(
+        &convert_to_property_values(&actual),
+        &["indent_size = 2"],
+    );
+    assert_eq!(loader.dir_chains_len(), 512);
+}
+
+#[test]
+fn clear_dir_chains_empties_memoization() {
+    let fs = TestFileSystem::new();
+    fs.write_root_editor_config_file("root = true\n[*]\nindent_size = 2");
+    let loader = create_editor_config_loader();
+    let file_path = fs.resolve("some_dir/Test.kt");
+    let _ = loader.load(Some(&file_path)).unwrap();
+    assert_eq!(loader.dir_chains_len(), 1);
+    loader.clear_dir_chains();
+    assert_eq!(loader.dir_chains_len(), 0);
+    let actual = loader.load(Some(&file_path)).unwrap();
+    assert_contains(
+        &convert_to_property_values(&actual),
+        &["indent_size = 2"],
+    );
+    assert_eq!(loader.dir_chains_len(), 1);
+}
+

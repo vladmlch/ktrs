@@ -5,7 +5,7 @@
 mod common;
 
 use common::{ast, find, kinds, root_text};
-use ktrs_ast::tree_util;
+use ktrs_ast::{Ast, NodeId, tree_util};
 use ktrs_syntax::SyntaxKind::*;
 
 #[test]
@@ -234,4 +234,152 @@ fn utf16_lengths_count_code_units() {
     let template = find(&a, STRING_TEMPLATE, 0);
     assert_eq!(a.text_length(template), 8);
     assert_eq!(a.text_length_utf16(template), 5);
+}
+
+#[test]
+fn intrusive_leaf_pointers_consistency() {
+    let mut a = ast("fun f() { val x = 1; println(x) }");
+
+    // Check initial intrusive list:
+    let first = a.first_leaf(a.root()).unwrap();
+    let mut cur = Some(first);
+    let mut forward_leaves = Vec::new();
+    while let Some(l) = cur {
+        assert!(a.is_leaf_element(l));
+        assert!(a.first_child_node(l).is_none());
+        assert!(a.last_child_node(l).is_none());
+        forward_leaves.push(l);
+        if let Some(next) = a.leaf_next(l) {
+            assert_eq!(a.leaf_prev(next), Some(l));
+        }
+        cur = a.leaf_next(l);
+    }
+    assert_eq!(a.leaf_prev(first), None);
+    assert!(!forward_leaves.is_empty());
+
+    let last = a.last_leaf(a.root()).unwrap();
+    assert_eq!(forward_leaves.last().copied(), Some(last));
+    assert_eq!(a.leaf_next(last), None);
+
+    let mut backward_leaves = Vec::new();
+    cur = Some(last);
+    while let Some(l) = cur {
+        backward_leaves.push(l);
+        cur = a.leaf_prev(l);
+    }
+    backward_leaves.reverse();
+    assert_eq!(forward_leaves, backward_leaves);
+
+    // Leaves via TreeUtil::leaves match leaf_next:
+    let leaves_via_tree_util: Vec<_> = a.leaves(first, true).collect();
+    assert_eq!(leaves_via_tree_util, forward_leaves[1..]);
+
+    // Test leaf replacement via raw_replace_with_text:
+    let eq = find(&a, EQ, 0);
+    let eq_prev = a.leaf_prev(eq).unwrap();
+    let eq_next = a.leaf_next(eq).unwrap();
+    let new_eq = a.raw_replace_with_text(eq, "==");
+    assert_eq!(a.leaf_prev(new_eq), Some(eq_prev));
+    assert_eq!(a.leaf_next(new_eq), Some(eq_next));
+    assert_eq!(a.leaf_next(eq_prev), Some(new_eq));
+    assert_eq!(a.leaf_prev(eq_next), Some(new_eq));
+    assert_eq!(a.leaf_prev(eq), None);
+    assert_eq!(a.leaf_next(eq), None);
+
+    // Test raw_remove:
+    let semi = find(&a, SEMICOLON, 0);
+    let semi_prev = a.leaf_prev(semi).unwrap();
+    let semi_next = a.leaf_next(semi).unwrap();
+    a.raw_remove(semi);
+    assert_eq!(a.leaf_next(semi_prev), Some(semi_next));
+    assert_eq!(a.leaf_prev(semi_next), Some(semi_prev));
+    assert_eq!(a.leaf_prev(semi), None);
+    assert_eq!(a.leaf_next(semi), None);
+
+    // Test raw_insert_before_me:
+    let new_semi = a.new_leaf(SEMICOLON, ";");
+    a.raw_insert_before_me(semi_next, new_semi);
+    assert_eq!(a.leaf_next(semi_prev), Some(new_semi));
+    assert_eq!(a.leaf_prev(new_semi), Some(semi_prev));
+    assert_eq!(a.leaf_next(new_semi), Some(semi_next));
+    assert_eq!(a.leaf_prev(semi_next), Some(new_semi));
+}
+
+fn assert_leaf_chain_integrity(a: &Ast) -> Vec<NodeId> {
+    let root = a.root();
+    let first = a.first_leaf(root);
+    let last = a.last_leaf(root);
+    let mut forward = Vec::new();
+    let mut cur = first;
+    while let Some(l) = cur {
+        assert!(a.is_leaf_element(l));
+        assert!(a.first_child_node(l).is_none());
+        assert!(a.last_child_node(l).is_none());
+        forward.push(l);
+        if let Some(next) = a.leaf_next(l) {
+            assert_eq!(a.leaf_prev(next), Some(l), "leaf_prev mismatch for next of {l:?}");
+        }
+        cur = a.leaf_next(l);
+    }
+    if let Some(f) = first {
+        assert_eq!(a.leaf_prev(f), None);
+    }
+    if let Some(l) = last {
+        assert_eq!(a.leaf_next(l), None);
+        assert_eq!(forward.last().copied(), Some(l));
+    } else {
+        assert!(forward.is_empty());
+    }
+    let mut backward = Vec::new();
+    cur = last;
+    while let Some(l) = cur {
+        backward.push(l);
+        cur = a.leaf_prev(l);
+    }
+    backward.reverse();
+    assert_eq!(forward, backward, "forward and backward leaf traversals must match");
+    forward
+}
+
+#[test]
+fn intrusive_leaf_pointers_complex_edits() {
+    let mut a = ast("fun f() { val x = 1; println(x) }");
+    assert_leaf_chain_integrity(&a);
+
+    // 1. Replace composite CALL_EXPRESSION with a single leaf:
+    let call = find(&a, CALL_EXPRESSION, 0);
+    let new_leaf = a.new_leaf(INTEGER_CONSTANT, "42");
+    a.raw_replace_with_list(call, Some(new_leaf));
+    assert_leaf_chain_integrity(&a);
+
+    // 2. Clone and replace:
+    let other_ast = ast("fun g() { other(1, 2) }");
+    let other_call = find(&other_ast, CALL_EXPRESSION, 0);
+    let cloned_call = a.clone(other_call);
+    a.raw_replace_with_list(new_leaf, Some(cloned_call));
+    assert_leaf_chain_integrity(&a);
+
+    // 3. Replace with empty composite:
+    let empty = a.new_composite(BLOCK);
+    a.raw_replace_with_list(cloned_call, Some(empty));
+    assert_leaf_chain_integrity(&a);
+
+    // 4. Add child into empty composite:
+    let child_leaf = a.new_leaf(IDENTIFIER, "foo");
+    a.raw_add_children(empty, child_leaf);
+    assert_leaf_chain_integrity(&a);
+
+    // 5. Insert before first leaf of file:
+    let first = a.first_leaf(a.root()).unwrap();
+    let new_first = a.new_leaf(IDENTIFIER, "/*start*/");
+    a.raw_insert_before_me(first, new_first);
+    assert_leaf_chain_integrity(&a);
+    assert_eq!(a.first_leaf(a.root()), Some(new_first));
+
+    // 6. Insert after last leaf of file:
+    let last = a.last_leaf(a.root()).unwrap();
+    let new_last = a.new_leaf(IDENTIFIER, "/*end*/");
+    a.raw_insert_after_me(last, new_last);
+    assert_leaf_chain_integrity(&a);
+    assert_eq!(a.last_leaf(a.root()), Some(new_last));
 }

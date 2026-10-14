@@ -1,13 +1,20 @@
 //! Ports of ktlint-rule-engine `internal/RuleExecutionContextTest.kt`, `internal/VisitorProviderTest.kt`,
 //! `internal/RuleProviderSorterTest.kt` and `api/DisabledRulesTest.kt`.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use ktrs_ast::{Ast, NodeId};
-use ktrs_lint::editorconfig::{RuleExecution, create_rule_execution_editor_config_property};
+use ktrs_lint::editorconfig::{
+    KTLINT_VERSION_PROPERTY, KtlintVersion, RuleExecution, create_rule_execution_editor_config_property,
+};
 use ktrs_lint::engine::visitor_provider::{VisitorProvider, get_sorted_rule_providers};
+use ktrs_lint::rule::TokenSet;
 use ktrs_lint::{
     About, AutocorrectDecision, Code, EditorConfig, EditorConfigOverride, Emit, KtLintException,
     KtLintRuleEngine, LintError, RuleId, RuleV2, RuleV2Provider,
 };
+use ktrs_syntax::SyntaxKind::FILE;
 
 const SOME_RULE_ID: RuleId = RuleId("standard:some-rule-id");
 const SOME_ABOUT: About = About {
@@ -231,4 +238,94 @@ fn given_a_rule_that_is_disabled_via_property_ktlint_some_rule_id_then_no_violat
             "{rule_id}"
         );
     }
+}
+
+struct ThrowingVisitRule;
+
+impl RuleV2 for ThrowingVisitRule {
+    fn rule_id(&self) -> RuleId {
+        SOME_RULE_ID
+    }
+
+    fn about(&self) -> About {
+        SOME_ABOUT
+    }
+
+    fn before_visit_child_nodes(&mut self, _ast: &mut Ast, _node: NodeId, _emit: &mut Emit<'_>) {
+        panic!("boom in visit");
+    }
+}
+
+#[test]
+fn given_a_rule_that_throws_in_visit_in_1_8_mode_then_it_is_wrapped_in_ktlint_rule_exception() {
+    let editor_config_override = EditorConfigOverride::empty().with(&KTLINT_VERSION_PROPERTY, KtlintVersion::V1_8);
+    let engine = KtLintRuleEngine::with_editor_config(
+        vec![RuleV2Provider::new(|| Box::new(ThrowingVisitRule) as Box<dyn RuleV2>)],
+        Default::default(),
+        editor_config_override,
+    );
+    let result = engine.lint(&Code::from_snippet("val x = 1", false), &mut |_| {});
+    let Err(KtLintException::Rule(e)) = result else {
+        panic!("expected KtLintRuleException, got {result:?}");
+    };
+    assert_eq!(e.rule_id, SOME_RULE_ID.value());
+    assert_eq!(e.cause, "boom in visit");
+    assert_eq!((e.line, e.col), (1, 1));
+}
+
+struct FilteredAfterRule {
+    after_visited_count: Arc<AtomicUsize>,
+}
+
+impl RuleV2 for FilteredAfterRule {
+    fn rule_id(&self) -> RuleId {
+        RuleId("standard:filtered-after")
+    }
+
+    fn visits_after_child_nodes(&self) -> bool {
+        true
+    }
+
+    fn visited_after_types(&self) -> Option<TokenSet> {
+        Some(TokenSet::create(&[FILE]))
+    }
+
+    fn after_visit_child_nodes(&mut self, _ast: &mut Ast, _node: NodeId, _emit: &mut Emit<'_>) {
+        self.after_visited_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn visited_after_types_filters_calls_to_after_visit_child_nodes() {
+    let counter_2_0 = Arc::new(AtomicUsize::new(0));
+    let c2 = Arc::clone(&counter_2_0);
+    let engine_2_0 = KtLintRuleEngine::new(vec![RuleV2Provider::new(move || {
+        Box::new(FilteredAfterRule {
+            after_visited_count: Arc::clone(&c2),
+        }) as Box<dyn RuleV2>
+    })]);
+    engine_2_0
+        .lint(&Code::from_snippet("val x = 1\nval y = 2", false), &mut |_| {})
+        .unwrap();
+    // Only FILE should be visited in after_visit_child_nodes
+    assert_eq!(counter_2_0.load(Ordering::SeqCst), 1);
+
+    let counter_1_8 = Arc::new(AtomicUsize::new(0));
+    let c18 = Arc::clone(&counter_1_8);
+    let override_1_8 =
+        EditorConfigOverride::empty().with(&KTLINT_VERSION_PROPERTY, KtlintVersion::V1_8);
+    let engine_1_8 = KtLintRuleEngine::with_editor_config(
+        vec![RuleV2Provider::new(move || {
+            Box::new(FilteredAfterRule {
+                after_visited_count: Arc::clone(&c18),
+            }) as Box<dyn RuleV2>
+        })],
+        Default::default(),
+        override_1_8,
+    );
+    engine_1_8
+        .lint(&Code::from_snippet("val x = 1\nval y = 2", false), &mut |_| {})
+        .unwrap();
+    // Only FILE should be visited in 1.8 too
+    assert_eq!(counter_1_8.load(Ordering::SeqCst), 1);
 }

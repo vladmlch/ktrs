@@ -217,6 +217,8 @@ pub use value_parameter_comment_rule::ValueParameterCommentRule;
 pub use when_entry_bracing::WhenEntryBracing;
 pub use wrapping_rule::WrappingRule;
 
+use std::sync::LazyLock;
+
 use crate::editorconfig::KtlintVersion::{V1_8, V2_0};
 use crate::rule::{About, RuleV2};
 use crate::rule_provider::RuleV2Provider;
@@ -229,8 +231,15 @@ pub const STANDARD_RULE_ABOUT: About = About {
 };
 
 /// The ported slice of `StandardRuleSetProvider().getRuleProviders()`, in its order, plus the rules that only
-/// ktlint 1.8's rule set has (`only_in(V1_8)`; the 2.0 counterparts are `only_in(V2_0)`).
+/// ktlint 1.8's rule set has (`only_in(V1_8)`; the 2.0 counterparts are `only_in(V2_0)`). Built once per process:
+/// each `RuleV2Provider::new` instantiates its rule for the metadata, so callers clone the cached list.
 pub fn standard_rule_providers() -> Vec<RuleV2Provider> {
+    STANDARD_RULE_PROVIDERS.clone()
+}
+
+static STANDARD_RULE_PROVIDERS: LazyLock<Vec<RuleV2Provider>> = LazyLock::new(standard_rule_providers_list);
+
+fn standard_rule_providers_list() -> Vec<RuleV2Provider> {
     vec![
         RuleV2Provider::new(|| Box::new(AnnotationRule::new())),
         RuleV2Provider::new(|| Box::new(AnnotationSpacingRule)),
@@ -351,7 +360,8 @@ pub fn standard_rule_provider(id: &str) -> Option<RuleV2Provider> {
     } else {
         format!("standard:{id}")
     };
-    standard_rule_providers()
-        .into_iter()
+    STANDARD_RULE_PROVIDERS
+        .iter()
         .find(|p| p.rule_id().value() == id)
+        .cloned()
 }

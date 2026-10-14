@@ -58,9 +58,16 @@ pub trait AstNodeExtension {
 
 impl AstNodeExtension for Ast {
     fn next_leaf(&self, n: NodeId) -> Option<NodeId> {
+        if self.is_leaf_element(n) {
+            let mut cur = self.leaf_next(n);
+            while let Some(x) = cur.filter(|&x| self.text_length(x) == 0) {
+                cur = self.leaf_next(x);
+            }
+            return cur;
+        }
         let mut node = next_leaf_any(self, n);
         while let Some(x) = node.filter(|&x| self.text_length(x) == 0) {
-            node = next_leaf_any(self, x);
+            node = if self.is_leaf_element(x) { self.leaf_next(x) } else { next_leaf_any(self, x) };
         }
         node
     }
@@ -82,9 +89,16 @@ impl AstNodeExtension for Ast {
     }
 
     fn prev_leaf(&self, n: NodeId) -> Option<NodeId> {
+        if self.is_leaf_element(n) {
+            let mut cur = self.leaf_prev(n);
+            while let Some(x) = cur.filter(|&x| self.text_length(x) == 0) {
+                cur = self.leaf_prev(x);
+            }
+            return cur;
+        }
         let mut node = prev_leaf_any(self, n);
         while let Some(x) = node.filter(|&x| self.text_length(x) == 0) {
-            node = prev_leaf_any(self, x);
+            node = if self.is_leaf_element(x) { self.leaf_prev(x) } else { prev_leaf_any(self, x) };
         }
         node
     }

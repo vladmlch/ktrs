@@ -5,21 +5,39 @@ use regex::Regex;
 
 /// `String.regExIgnoringDiacriticsAndStrokesOnLetters()`: `A-Z` -> `\p{Lu}`, `a-z` -> `\p{Ll}`.
 pub fn reg_ex_ignoring_diacritics_and_strokes_on_letters(pattern: &str) -> KotlinRegex {
-    KotlinRegex::new(&pattern.replace("A-Z", r"\p{Lu}").replace("a-z", r"\p{Ll}"))
+    KotlinRegex::with_ascii_fallback(&pattern.replace("A-Z", r"\p{Lu}").replace("a-z", r"\p{Ll}"), pattern)
 }
 
 /// A Kotlin `Regex`, of which the rules only call `matches` (a full match).
 #[derive(Debug)]
-pub struct KotlinRegex(Regex);
+pub struct KotlinRegex {
+    unicode: Regex,
+    ascii: Option<Regex>,
+}
 
 impl KotlinRegex {
     pub fn new(pattern: &str) -> KotlinRegex {
-        KotlinRegex(Regex::new(&format!("^(?:{})$", to_rust_syntax(pattern))).expect("PatternSyntaxException"))
+        KotlinRegex {
+            unicode: Regex::new(&format!("^(?:{})$", to_rust_syntax(pattern))).expect("PatternSyntaxException"),
+            ascii: None,
+        }
+    }
+
+    pub fn with_ascii_fallback(unicode_pattern: &str, ascii_pattern: &str) -> KotlinRegex {
+        let unicode = Regex::new(&format!("^(?:{})$", to_rust_syntax(unicode_pattern))).expect("PatternSyntaxException");
+        let ascii = Regex::new(&format!("^(?:{})$", to_rust_syntax(ascii_pattern))).ok();
+        KotlinRegex { unicode, ascii }
     }
 
     /// `Regex.matches(input)` / `String.matches(regex)`.
     pub fn matches(&self, input: &str) -> bool {
-        self.0.is_match(input)
+        if input.is_ascii() {
+            self.ascii
+                .as_ref()
+                .map_or_else(|| self.unicode.is_match(input), |re| re.is_match(input))
+        } else {
+            self.unicode.is_match(input)
+        }
     }
 }
 
@@ -63,6 +81,7 @@ mod tests {
     fn java_semantics() {
         let class_name = reg_ex_ignoring_diacritics_and_strokes_on_letters("[A-Z][A-Za-z\\d]*");
         assert!(class_name.matches("ŸëšThïs123"));
+        assert!(class_name.matches("FooBar123"));
         assert!(!class_name.matches("Foo١")); // Arabic-Indic digit: not `\d` in Java
         assert!(!class_name.matches("fooBar"));
         let backticked = KotlinRegex::new("`.*`");

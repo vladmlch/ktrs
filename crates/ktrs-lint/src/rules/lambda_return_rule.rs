@@ -75,12 +75,12 @@ fn visit_return_statement(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
     });
 }
 
-fn refers_to_inner_most_lambda_argument(ast: &Ast, node: NodeId, qualifier_identifier: Option<String>) -> bool {
+fn refers_to_inner_most_lambda_argument<'a>(ast: &'a Ast, node: NodeId, qualifier_identifier: Option<&'a str>) -> bool {
     qualifier_identifier == labeled_lambda_argument_identifier(ast, node).or_else(|| unlabeled_lambda_argument_identifier(ast, node))
 }
 
 /// `foo.let someLabel@{ ... }` -> `someLabel`.
-fn labeled_lambda_argument_identifier(ast: &Ast, node: NodeId) -> Option<String> {
+fn labeled_lambda_argument_identifier(ast: &Ast, node: NodeId) -> Option<&str> {
     let lambda = ast.parent_matching(node, |it| ast.element_type(it) == LAMBDA_EXPRESSION)?;
     if ast.tree_parent(lambda).map(|p| ast.element_type(p)) != Some(LABELED_EXPRESSION) {
         return None;
@@ -89,7 +89,7 @@ fn labeled_lambda_argument_identifier(ast: &Ast, node: NodeId) -> Option<String>
 }
 
 /// `foo.let { ... }` -> `let`.
-fn unlabeled_lambda_argument_identifier(ast: &Ast, node: NodeId) -> Option<String> {
+fn unlabeled_lambda_argument_identifier(ast: &Ast, node: NodeId) -> Option<&str> {
     let lambda = ast.parent_matching(node, |it| ast.element_type(it) == LAMBDA_EXPRESSION)?;
     if ast.tree_parent(lambda).map(|p| ast.element_type(p)) == Some(LABELED_EXPRESSION) {
         return None;
@@ -97,10 +97,10 @@ fn unlabeled_lambda_argument_identifier(ast: &Ast, node: NodeId) -> Option<Strin
     let lambda_argument = ast.parent_matching(lambda, |it| ast.element_type(it) == LAMBDA_ARGUMENT)?;
     let call_expression = ast.parent_matching(lambda_argument, |it| ast.element_type(it) == CALL_EXPRESSION)?;
     let reference_expression = ast.find_child_by_type(call_expression, REFERENCE_EXPRESSION)?;
-    ast.find_child_by_type(reference_expression, IDENTIFIER).map(|it| ast.text(it))
+    ast.find_child_by_type(reference_expression, IDENTIFIER).map(|it| ast.leaf_text(it))
 }
 
-fn qualifier_identifier(ast: &Ast, node: Option<NodeId>) -> Option<String> {
+fn qualifier_identifier(ast: &Ast, node: Option<NodeId>) -> Option<&str> {
     let label = node.filter(|&it| ast.element_type(it) == LABEL_QUALIFIER).and_then(|it| ast.find_child_by_type(it, LABEL))?;
-    ast.find_child_by_type(label, IDENTIFIER).map(|it| ast.text(it))
+    ast.find_child_by_type(label, IDENTIFIER).map(|it| ast.leaf_text(it))
 }

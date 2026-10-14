@@ -160,3 +160,25 @@ fn lint_changed_since_needs_files_and_a_native_run() {
     assert_eq!(run.exit_code, 2, "{run:?}");
     assert_eq!(run.err, "--changed-since is not available with 'custom.jar', a ktlint plugin JAR that runs on ktlint's jar");
 }
+
+#[cfg(unix)]
+#[test]
+fn changed_since_finds_symlinked_files_without_pruning_directory() {
+    use std::os::unix::fs::symlink;
+    let project = Project::new("changed-since-symlink", &[("other/target.kt", BEFORE), ("regular.kt", BEFORE)]);
+    git(project.dir(), &["init", "-q"]);
+    git(project.dir(), &["add", "."]);
+    git(project.dir(), &["commit", "-q", "-m", "base"]);
+    git(project.dir(), &["tag", "base"]);
+
+    // Create a symlink in a new subdirectory: link_dir/link.kt -> ../other/target.kt
+    std::fs::create_dir_all(project.dir().join("link_dir")).unwrap();
+    symlink("../other/target.kt", project.dir().join("link_dir/link.kt")).unwrap();
+
+    // The symlink link_dir/link.kt is untracked/changed in git. link_dir has no other files.
+    let run = lint(&project, &["--changed-since", "base"]);
+    assert_eq!(run.exit_code, 1);
+    assert_line!(run.out, r"link_dir.link\.kt:1:\d+:.*\(standard:no-multi-spaces\)");
+    assert_no_line!(run.out, r"(other.target|regular)\.kt:.*");
+}
+

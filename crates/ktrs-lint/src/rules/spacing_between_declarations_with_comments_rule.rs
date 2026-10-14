@@ -45,7 +45,7 @@ fn visit_commented_declaration(ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>)
     if let Some(prev_sibling) = ast.prev_sibling(node).filter(|&it| !is_blank_line(ast, it)) {
         emit(ast, ast.start_offset(node), "Declarations and declarations with comments should have an empty space between.", true)
             .if_autocorrect_allowed(|| {
-                let indent = ast.prev_leaf(node).map(|it| ast.text(it).trim_matches('\n').to_owned()).unwrap_or_default();
+                let indent = ast.prev_leaf(node).map(|it| ast.leaf_text(it).trim_matches('\n')).unwrap_or("");
                 ast.replace_text_with(prev_sibling, &format!("\n\n{indent}"));
             });
     }

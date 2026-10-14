@@ -44,14 +44,14 @@ pub(super) fn report_and_correct_trailing_comma_node_before(
                 if let Some(last_node_before_arrow) = last_node_before_arrow
                     && !ast.is_white_space_with_newline(last_node_before_arrow)
                 {
-                    let message = format!("Expected a newline between the trailing comma and  \"{}\"", ast.text(inspect_node));
+                    let message = format!("Expected a newline between the trailing comma and  \"{}\"", ast.leaf_text(inspect_node));
                     emit(ast, ast.start_offset(trailing_comma_node), &message, true).if_autocorrect_allowed(|| {
                         let indent = ast.indent(ast.parent(inspect_node).expect("NullPointerException: parent!!"));
                         ast.upsert_whitespace_after_me(last_node_before_arrow, &indent);
                     });
                 }
             } else {
-                let message = format!("Unnecessary trailing comma before \"{}\"", ast.text(inspect_node));
+                let message = format!("Unnecessary trailing comma before \"{}\"", ast.leaf_text(inspect_node));
                 emit(ast, ast.start_offset(trailing_comma_node), &message, true).if_autocorrect_allowed(|| ast.remove(trailing_comma_node));
             }
         }
@@ -62,9 +62,9 @@ pub(super) fn report_and_correct_trailing_comma_node_before(
                 let prev_node = ast.prev_code_leaf(inspect_node).expect("NullPointerException: prevCodeLeaf!!");
                 let offset = ast.start_offset(prev_node) + ast.text_length(prev_node);
                 let message = if add_new_line {
-                    format!("Missing trailing comma and newline before \"{}\"", ast.text(inspect_node))
+                    format!("Missing trailing comma and newline before \"{}\"", ast.leaf_text(inspect_node))
                 } else {
-                    format!("Missing trailing comma before \"{}\"", ast.text(inspect_node))
+                    format!("Missing trailing comma before \"{}\"", ast.leaf_text(inspect_node))
                 };
                 emit(ast, offset, &message, true).if_autocorrect_allowed(|| {
                     if add_new_line {
@@ -106,7 +106,7 @@ pub(super) fn report_and_correct_trailing_comma_node_before(
         }
         TrailingCommaState::Redundant => {
             let trailing_comma_node = trailing_comma_node.unwrap();
-            let message = format!("Unnecessary trailing comma before \"{}\"", ast.text(inspect_node));
+            let message = format!("Unnecessary trailing comma before \"{}\"", ast.leaf_text(inspect_node));
             emit(ast, ast.start_offset(trailing_comma_node), &message, true).if_autocorrect_allowed(|| ast.remove(trailing_comma_node));
         }
         TrailingCommaState::NotExists => {}

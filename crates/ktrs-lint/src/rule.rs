@@ -228,5 +228,12 @@ pub trait RuleV2 {
         false
     }
 
+    /// The element types [`Self::after_visit_child_nodes`] acts on (`None`: every node). For a node of
+    /// any other type the hook must do nothing at all (no emit, edit, state change or stop), so the
+    /// engine skips the call. Asked once per traversal.
+    fn visited_after_types(&self) -> Option<TokenSet> {
+        None
+    }
+
     fn after_last_node(&mut self) {}
 }

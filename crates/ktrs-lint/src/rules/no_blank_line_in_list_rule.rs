@@ -37,7 +37,7 @@ impl RuleV2 for NoBlankLineInListRule {
     }
 
     fn before_visit_child_nodes(&mut self, ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
-        if !ast.is_white_space(node) {
+        if !ast.is_white_space(node) || ast.newline_count(node) < 2 {
             return;
         }
         // Whether the whitespace before the first and after the last element is part of the list depends on the list type

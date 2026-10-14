@@ -158,14 +158,14 @@ fn report_and_correct_trailing_comma_node_before(
         TrailingCommaState::Exists => {
             if !is_trailing_comma_allowed {
                 let trailing_comma_node = trailing_comma_node.unwrap();
-                let message = format!("Unnecessary trailing comma before \"{}\"", ast.text(inspect_node));
+                let message = format!("Unnecessary trailing comma before \"{}\"", ast.leaf_text(inspect_node));
                 emit(ast, ast.start_offset(trailing_comma_node), &message, true).if_autocorrect_allowed(|| ast.remove(trailing_comma_node));
             }
         }
         TrailingCommaState::Missing => {
             if is_trailing_comma_allowed {
                 let prev_node = ast.prev_code_leaf(inspect_node).expect("NullPointerException: prevCodeLeaf!!");
-                let message = format!("Missing trailing comma before \"{}\"", ast.text(inspect_node));
+                let message = format!("Missing trailing comma before \"{}\"", ast.leaf_text(inspect_node));
                 emit(ast, ast.start_offset(prev_node) + ast.text_length(prev_node), &message, true).if_autocorrect_allowed(|| {
                     if let Some(before) = ast.prev_code_sibling(inspect_node).and_then(|it| ast.next_sibling(it))
                         && let Some(parent) = ast.parent(before)
@@ -178,7 +178,7 @@ fn report_and_correct_trailing_comma_node_before(
         }
         TrailingCommaState::Redundant => {
             let trailing_comma_node = trailing_comma_node.unwrap();
-            let message = format!("Unnecessary trailing comma before \"{}\"", ast.text(inspect_node));
+            let message = format!("Unnecessary trailing comma before \"{}\"", ast.leaf_text(inspect_node));
             emit(ast, ast.start_offset(trailing_comma_node), &message, true).if_autocorrect_allowed(|| ast.remove(trailing_comma_node));
         }
         TrailingCommaState::NotExists => {

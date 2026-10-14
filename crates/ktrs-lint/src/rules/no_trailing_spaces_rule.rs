@@ -40,16 +40,16 @@ impl RuleV2 for NoTrailingSpacesRule {
             }
 
             if ast.element_type(node) == KDOC_TEXT
-                && ast.text(node).ends_with(' ')
+                && ast.leaf_text(node).ends_with(' ')
                 && ast
                     .next_leaf(node)
                     .filter(|&it| {
                         ast.next_leaf(it).map(|n| ast.element_type(n)) == Some(KDOC_LEADING_ASTERISK)
                             || ast.next_leaf(it).map(|n| ast.element_type(n)) == Some(KDOC_END)
                     })
-                    .is_some_and(|it| ast.text(it).starts_with('\n'))
+                    .is_some_and(|it| ast.leaf_text(it).starts_with('\n'))
             {
-                let trimmed_text = ast.text(node).trim_end().to_owned();
+                let trimmed_text = ast.leaf_text(node).trim_end().to_owned();
                 emit(ast, ast.start_offset(node) + trimmed_text.len(), "Trailing space(s)", true)
                     .if_autocorrect_allowed(|| ast.replace_text_with(node, &trimmed_text));
             }

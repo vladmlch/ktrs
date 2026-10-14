@@ -41,12 +41,19 @@ impl ThreadSafeEditorConfigCache {
             Some((registry, _)) => registry.clone(),
             None => return Ok(()),
         };
-        let edit_config = Arc::new(ktrs_editorconfig::load(resource, &registry)?);
-        self.in_memory_map
-            .write()
-            .unwrap()
-            .insert(resource.to_path_buf(), (registry, edit_config));
-        Ok(())
+        match ktrs_editorconfig::load(resource, &registry) {
+            Ok(edit_config) => {
+                self.in_memory_map
+                    .write()
+                    .unwrap()
+                    .insert(resource.to_path_buf(), (registry, Arc::new(edit_config)));
+                Ok(())
+            }
+            Err(e) => {
+                self.in_memory_map.write().unwrap().remove(resource);
+                Err(e)
+            }
+        }
     }
 
     pub fn clear(&self) {

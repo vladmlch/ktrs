@@ -94,6 +94,10 @@ impl RuleV2 for WrappingRule {
         true
     }
 
+    fn visited_after_types(&self) -> Option<TokenSet> {
+        Some(TokenSet::create(&[BLOCK]))
+    }
+
     fn after_visit_child_nodes(&mut self, ast: &mut Ast, node: NodeId, emit: &mut Emit<'_>) {
         self.after_visit_block(ast, node, emit);
     }

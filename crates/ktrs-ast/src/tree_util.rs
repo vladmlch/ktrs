@@ -6,17 +6,7 @@ use crate::arena::{Ast, NodeId};
 
 /// `TreeUtil.findLastLeaf(element)`.
 pub fn find_last_leaf(ast: &Ast, element: NodeId) -> Option<NodeId> {
-    if ast.is_leaf_element(element) {
-        return Some(element);
-    }
-    let mut child = ast.last_child_node(element);
-    while let Some(c) = child {
-        if let Some(leaf) = find_last_leaf(ast, c) {
-            return Some(leaf);
-        }
-        child = ast.tree_prev(c);
-    }
-    None
+    ast.last_leaf(element)
 }
 
 /// `TreeUtil.getFileElement(element)`: the enclosing file or dummy holder, `element` included.
@@ -33,11 +23,17 @@ pub fn get_file_element(ast: &Ast, element: NodeId) -> Option<NodeId> {
 
 /// `TreeUtil.nextLeaf(node)`.
 pub fn next_leaf(ast: &Ast, start: NodeId) -> Option<NodeId> {
+    if ast.is_leaf_element(start) {
+        return ast.leaf_next(start);
+    }
+    if let Some(last) = ast.last_leaf(start) {
+        return ast.leaf_next(last);
+    }
     let mut element = Some(start);
     while let Some(e) = element {
         let mut next_tree = ast.tree_next(e);
         while let Some(t) = next_tree {
-            if let Some(next) = find_first_leaf_or_type(ast, t) {
+            if let Some(next) = ast.first_leaf(t) {
                 return Some(next);
             }
             next_tree = ast.tree_next(t);
@@ -47,27 +43,19 @@ pub fn next_leaf(ast: &Ast, start: NodeId) -> Option<NodeId> {
     None
 }
 
-fn find_first_leaf_or_type(ast: &Ast, element: NodeId) -> Option<NodeId> {
-    if ast.is_leaf_element(element) {
-        return Some(element);
-    }
-    let mut child = ast.first_child_node(element);
-    while let Some(c) = child {
-        if let Some(leaf) = find_first_leaf_or_type(ast, c) {
-            return Some(leaf);
-        }
-        child = ast.tree_next(c);
-    }
-    None
-}
-
 /// `TreeUtil.prevLeaf(node)`.
 pub fn prev_leaf(ast: &Ast, start: NodeId) -> Option<NodeId> {
+    if ast.is_leaf_element(start) {
+        return ast.leaf_prev(start);
+    }
+    if let Some(first) = ast.first_leaf(start) {
+        return ast.leaf_prev(first);
+    }
     let mut start = Some(start);
     while let Some(s) = start {
         let mut prev_tree = ast.tree_prev(s);
         while let Some(t) = prev_tree {
-            if let Some(prev) = find_last_leaf(ast, t) {
+            if let Some(prev) = ast.last_leaf(t) {
                 return Some(prev);
             }
             prev_tree = ast.tree_prev(t);
@@ -94,7 +82,7 @@ pub fn prev_leaf_with_state(ast: &Ast, start: NodeId, common_parent: &mut Common
         common_parent.next_leaf_branch_start = Some(s);
         let mut prev_tree = ast.tree_prev(s);
         while let Some(t) = prev_tree {
-            if let Some(prev) = find_last_leaf(ast, t) {
+            if let Some(prev) = ast.last_leaf(t) {
                 common_parent.start_leaf_branch_start = Some(t);
                 return Some(prev);
             }
@@ -124,7 +112,7 @@ impl Iterator for Leaves<'_> {
 
     fn next(&mut self) -> Option<NodeId> {
         let cur = self.next?;
-        self.next = if self.forward { next_leaf(self.ast, cur) } else { prev_leaf(self.ast, cur) };
+        self.next = if self.forward { self.ast.leaf_next(cur) } else { self.ast.leaf_prev(cur) };
         Some(cur)
     }
 }

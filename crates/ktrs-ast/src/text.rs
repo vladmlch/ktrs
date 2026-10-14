@@ -57,7 +57,8 @@ impl Ast {
     /// `getText().hashCode()` (Java `String.hashCode()`), recomputed only along the paths edited since
     /// the last call: `hash(ab) = hash(a) * 31^utf16_len(b) + hash(b)`.
     pub fn text_hash_code(&self, n: NodeId) -> i32 {
-        if let Some(hash) = self.node(n).text_hash.get() {
+        let hash = self.node(n).text_hash.get();
+        if hash != u32::MAX {
             return hash as i32;
         }
         let hash = if self.is_leaf_element(n) {
@@ -72,7 +73,7 @@ impl Ast {
             }
             hash
         };
-        self.node(n).text_hash.set(Some(hash));
+        self.node(n).text_hash.set(hash);
         hash as i32
     }
 

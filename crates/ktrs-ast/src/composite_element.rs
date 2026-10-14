@@ -25,6 +25,9 @@ impl Ast {
 
     /// `getChildren(null)` appended to `out`: a snapshot, unaffected by later edits.
     pub fn get_children(&self, n: NodeId, out: &mut Vec<NodeId>) {
+        if self.is_leaf_element(n) {
+            return;
+        }
         let mut child = self.node(n).first;
         while child != NONE {
             out.push(NodeId(child));
@@ -119,8 +122,26 @@ impl Ast {
         match self.last_child_node(this) {
             None => {
                 let chain_last = self.raw_set_parents(first, this);
+                let prev_l = tree_util::prev_leaf(self, this);
+                let next_l = tree_util::next_leaf(self, this);
                 self.set_first_child_node(this, first.0);
                 self.set_last_child_node(this, chain_last.0);
+
+                let (new_first, new_last) = self.prepare_chain_leaves(first, None);
+                if let (Some(nf), Some(nl)) = (new_first, new_last) {
+                    if let Some(prev) = prev_l {
+                        self.set_leaf_next(prev, nf.0);
+                        self.set_leaf_prev(nf, prev.0);
+                    } else {
+                        self.set_leaf_prev(nf, NONE);
+                    }
+                    if let Some(next) = next_l {
+                        self.set_leaf_prev(next, nl.0);
+                        self.set_leaf_next(nl, next.0);
+                    } else {
+                        self.set_leaf_next(nl, NONE);
+                    }
+                }
             }
             Some(last) => self.raw_insert_after_me_without_notifications(last, first),
         }

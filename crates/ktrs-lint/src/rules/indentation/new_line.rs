@@ -1,5 +1,8 @@
 //! `IndentationRule.kt` from `visitNewLineIndentation` to `isPrecededByComment`: checking one newline whitespace.
 
+use std::borrow::Cow;
+use std::sync::Arc;
+
 use ktrs_ast::{Ast, NodeId};
 use ktrs_parser::kt_tokens::COMMENTS;
 use ktrs_syntax::SyntaxKind::{BLOCK_COMMENT, ELVIS, KDOC_END, KDOC_LEADING_ASTERISK, OPEN_QUOTE, OPERATION_REFERENCE, TYPE_CONSTRAINT};
@@ -10,35 +13,53 @@ use crate::ast_node_edit::AstNodeEdit;
 use crate::ast_node_extension::AstNodeExtension;
 use crate::rule::{AutocorrectDecision, Emit, IndentStyle};
 
+#[inline]
+fn indent_matches(slice: &str, prefix: &str, suffix: &str) -> bool {
+    slice.len() == prefix.len() + suffix.len()
+        && slice.starts_with(prefix)
+        && &slice[prefix.len()..] == suffix
+}
+
 impl IndentationRule {
     pub(super) fn visit_new_line_indentation(&mut self, ast: &mut Ast, node: NodeId, emit_and_approve: &mut Emit<'_>) {
         if ignore_indent(ast, node) {
             return;
         }
 
-        let normalized_node_indent = self.normalized_indent(ast, node, emit_and_approve);
-        let expected_indentation = self.expected_indent(ast, node);
-        let text = ast.leaf_text(node).to_owned();
-        let node_indent = substring_after_last_newline(&text);
-        if node_indent != normalized_node_indent || normalized_node_indent != expected_indentation {
-            let auto_correct = if normalized_node_indent != expected_indentation {
-                let message =
-                    format!("Unexpected indentation ({}) (should be {})", normalized_node_indent.len(), expected_indentation.len());
-                emit_and_approve(ast, ast.start_offset(node) + text.len() - node_indent.len(), &message, true)
-                    == AutocorrectDecision::AllowAutocorrect
+        let (expected_prefix, expected_suffix) = self.expected_indent_parts(ast, node);
+        let expected_len = expected_prefix.len() + expected_suffix.len();
+        let (auto_correct, before_last_newline) = {
+            let normalized_node_indent = self.normalized_indent(ast, node, emit_and_approve);
+            let text = ast.leaf_text(node);
+            let node_indent = substring_after_last_newline(text);
+            let is_normalized = node_indent == normalized_node_indent.as_ref();
+            let matches_expected = indent_matches(normalized_node_indent.as_ref(), expected_prefix, expected_suffix);
+            if !is_normalized || !matches_expected {
+                let auto_correct = if !matches_expected {
+                    let message =
+                        format!("Unexpected indentation ({}) (should be {})", normalized_node_indent.len(), expected_len);
+                    emit_and_approve(ast, ast.start_offset(node) + text.len() - node_indent.len(), &message, true)
+                        == AutocorrectDecision::AllowAutocorrect
+                } else {
+                    // Indentation was at correct level but contained invalid indent characters. This violation has already
+                    // been emitted.
+                    true
+                };
+                if auto_correct {
+                    (true, Some(text[..text.rfind('\n').unwrap_or(text.len())].to_owned()))
+                } else {
+                    (false, None)
+                }
             } else {
-                // Indentation was at correct level but contained invalid indent characters. This violation has already
-                // been emitted.
-                true
-            };
-            if auto_correct {
-                let before_last_newline = &text[..text.rfind('\n').unwrap_or(text.len())];
-                ast.replace_text_with(node, &format!("{before_last_newline}\n{expected_indentation}"));
+                (false, None)
             }
+        };
+        if let (true, Some(before)) = (auto_correct, before_last_newline) {
+            ast.replace_text_with(node, &format!("{before}\n{expected_prefix}{expected_suffix}"));
         }
     }
 
-    fn expected_indent(&self, ast: &Ast, this: NodeId) -> String {
+    fn expected_indent_parts<'a>(&'a self, ast: &Ast, this: NodeId) -> (&'a str, &'a str) {
         let last_index_context = self.indent_context_stack.last().expect("NullPointerException: peekLast()");
         let next_leaf = ast.next_leaf(this);
         let from_first_leaf = ast.first_child_leaf_or_self(last_index_context.from_ast_node);
@@ -49,22 +70,25 @@ impl IndentationRule {
         } else {
             &last_index_context.child_indent
         };
-        format!("{}{}", last_index_context.node_indent, adjusted_child_indent)
+        (&last_index_context.node_indent, adjusted_child_indent)
     }
 
-    fn normalized_indent(&self, ast: &Ast, this: NodeId, emit_and_approve: &mut Emit<'_>) -> String {
+    fn normalized_indent<'a>(&self, ast: &'a Ast, this: NodeId, emit_and_approve: &mut Emit<'_>) -> Cow<'a, str> {
         let text = ast.leaf_text(this);
         let node_indent = substring_after_last_newline(text);
         let offset = ast.start_offset(this) + text.len() - node_indent.len();
         match self.indent_config.indent_style {
             IndentStyle::Space => {
                 if node_indent.contains('\t') {
-                    emit_and_approve(ast, offset, "Unexpected tab character(s)", true)
+                    let normalized = emit_and_approve(ast, offset, "Unexpected tab character(s)", true)
                         // Ignore approval and fix invalid indent character always
-                        .if_autocorrect_allowed(|| self.indent_config.to_normalized_indent(node_indent))
-                        .unwrap_or_else(|| node_indent.to_owned())
+                        .if_autocorrect_allowed(|| self.indent_config.to_normalized_indent(node_indent));
+                    match normalized {
+                        Some(s) => Cow::Owned(s),
+                        None => Cow::Borrowed(node_indent),
+                    }
                 } else {
-                    node_indent.to_owned()
+                    Cow::Borrowed(node_indent)
                 }
             }
             IndentStyle::Tab => {
@@ -72,13 +96,16 @@ impl IndentationRule {
                 let node_indent_without_acceptable_trailing_spaces =
                     node_indent.strip_suffix(acceptable_trailing_spaces).unwrap_or(node_indent);
                 if node_indent_without_acceptable_trailing_spaces.contains(' ') {
-                    emit_and_approve(ast, offset, "Unexpected space character(s)", true)
+                    let normalized = emit_and_approve(ast, offset, "Unexpected space character(s)", true)
                         .if_autocorrect_allowed(|| {
                             self.indent_config.to_normalized_indent(node_indent_without_acceptable_trailing_spaces) + acceptable_trailing_spaces
-                        })
-                        .unwrap_or_else(|| node_indent.to_owned())
+                        });
+                    match normalized {
+                        Some(s) => Cow::Owned(s),
+                        None => Cow::Borrowed(node_indent),
+                    }
                 } else {
-                    node_indent.to_owned()
+                    Cow::Borrowed(node_indent)
                 }
             }
         }
@@ -149,10 +176,10 @@ pub(super) fn start_no_indent_zone(ast: &Ast, node: NodeId) -> IndentContext {
     IndentContext {
         from_ast_node: node,
         to_ast_node,
-        node_indent: String::new(),
-        first_child_indent: String::new(),
-        child_indent: String::new(),
-        last_child_indent: String::new(),
+        node_indent: Arc::from(""),
+        first_child_indent: Arc::from(""),
+        child_indent: Arc::from(""),
+        last_child_indent: Arc::from(""),
         activated: true,
         node_types: IndentContext::node_types(ast, node, to_ast_node),
     }

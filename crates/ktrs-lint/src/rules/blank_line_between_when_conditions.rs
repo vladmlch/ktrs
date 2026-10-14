@@ -126,7 +126,7 @@ fn add_blank_lines_between_when_conditions(ast: &mut Ast, node: NodeId, emit_and
 }
 
 fn contains_blank_line(ast: &Ast, n: NodeId) -> bool {
-    ast.is_white_space(n) && ast.text(n).bytes().filter(|&b| b == b'\n').count() > 1
+    ast.is_white_space(n) && ast.newline_count(n) > 1
 }
 
 fn has_any_multiline_when_condition(ast: &Ast, n: NodeId, ktlint_version: KtlintVersion) -> bool {

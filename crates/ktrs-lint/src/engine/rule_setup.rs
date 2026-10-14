@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::editorconfig::{EditorConfig, KtlintVersion};
+use crate::engine::internal_rules::KTLINT_SUPPRESSION_RULE_ID;
+use crate::engine::rule_dispatch::RuleDispatch;
 use crate::engine::rule_execution_context::rule_editor_config;
 use crate::engine::rule_filter::{InternalRuleProvidersFilter, RuleExecutionRuleFilter, apply_rule_filters};
 use crate::engine::rule_provider_sorter_1_8::run_after_rule_filter;
@@ -21,6 +23,8 @@ pub(crate) struct RuleSetup {
     pub(crate) ktlint_version: KtlintVersion,
     pub(crate) rule_providers: Vec<RuleV2Provider>,
     pub(crate) visitor_provider: VisitorProvider,
+    pub(crate) dispatch: Arc<RuleDispatch>,
+    pub(crate) suppression_dispatch: Arc<RuleDispatch>,
     /// 1.8's `RunAfterRuleFilter` failed: the `IllegalStateException` message every file then throws.
     pub(crate) rule_filter_error: Option<String>,
     /// `RuleExecutionRuleFilter`'s WARNs, which upstream logs for every file.
@@ -71,11 +75,24 @@ impl RuleSetupCache {
                 }
             }
         }
+        let visitor_provider = VisitorProvider::for_version(&rule_providers, ktlint_version);
+        let rules = visitor_provider.rules();
+        let (suppression, others): (Vec<_>, Vec<_>) = rules
+            .into_iter()
+            .partition(|r| r.rule_id() == KTLINT_SUPPRESSION_RULE_ID);
+        let dispatch = Arc::new(RuleDispatch::build(
+            others.iter().map(|r| (r.visited_types(), r.visits_after_child_nodes())),
+        ));
+        let suppression_dispatch = Arc::new(RuleDispatch::build(
+            suppression.iter().map(|r| (r.visited_types(), r.visits_after_child_nodes())),
+        ));
         let setup = Arc::new(RuleSetup {
-            visitor_provider: VisitorProvider::for_version(&rule_providers, ktlint_version),
+            visitor_provider,
             editor_config,
             ktlint_version,
             rule_providers,
+            dispatch,
+            suppression_dispatch,
             rule_filter_error,
             rule_filter_warnings,
             rule_editor_configs: Mutex::default(),

@@ -11,9 +11,12 @@ pub const OPTION: &str = "--changed-since";
 
 const SHALLOW_CLONE_HINT: &str = "in a shallow clone, fetch the history first (actions/checkout: `fetch-depth: 0`)";
 
-/// Canonical paths.
+/// Canonical paths of changed files, plus ancestors for walk pruning.
 #[derive(Clone, Debug, Default)]
-pub struct ChangedFiles(HashSet<PathBuf>);
+pub struct ChangedFiles {
+    canonical: HashSet<PathBuf>,
+    ancestors: HashSet<PathBuf>,
+}
 
 impl ChangedFiles {
     /// `Err` is a usage error message: no `git`, no repository at `working_dir`, or no such commit.
@@ -36,12 +39,51 @@ impl ChangedFiles {
         let untracked = git(top_level, &["ls-files", "--others", "--exclude-standard", "-z"])
             .map_err(|e| failure("git ls-files failed", &e))?;
         let files = tracked.split('\0').chain(untracked.split('\0')).filter(|path| !path.is_empty());
-        Ok(ChangedFiles(files.filter_map(|path| fs::canonicalize(top_level.join(path)).ok()).collect()))
+        let mut canonical = HashSet::new();
+        let mut ancestors = HashSet::new();
+        for path in files {
+            let full_path = top_level.join(path);
+            if let Some(canon) = canonical_entry(&full_path) {
+                if let Some(canon_parent) = canon.parent() {
+                    for ancestor in canon_parent.ancestors() {
+                        ancestors.insert(ancestor.to_path_buf());
+                    }
+                }
+                canonical.insert(canon);
+            }
+        }
+        Ok(ChangedFiles { canonical, ancestors })
     }
 
+    /// Canonicalizes `file`'s parent directory and looks it up: one `fs` call, meant to run once per file.
     pub fn contains(&self, file: &Path) -> bool {
-        fs::canonicalize(file).is_ok_and(|file| self.0.contains(&file))
+        canonical_entry(file).is_some_and(|file| self.contains_canonical(&file))
     }
+
+    /// `contains` on an already-canonicalized path.
+    fn contains_canonical(&self, file: &Path) -> bool {
+        self.canonical.contains(file)
+    }
+
+    /// Every directory that is an ancestor of a changed file (canonical, like `self.canonical`): a directory
+    /// holds no changed file unless it is one of these, so a walk can skip any other subtree.
+    pub fn ancestors(&self) -> HashSet<PathBuf> {
+        self.ancestors.clone()
+    }
+}
+
+/// Canonicalizes parent directories preserving the entry itself, so symlinked files can be identified
+/// without dereferencing to their target files.
+fn canonical_entry(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?;
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let canon_dir = fs::canonicalize(parent).ok()?;
+    Some(canon_dir.join(file_name))
 }
 
 /// `git -C <dir> <args>`: its stdout, or its stderr when it fails.

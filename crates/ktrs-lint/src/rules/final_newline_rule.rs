@@ -1,13 +1,15 @@
 //! Port of ktlint-ruleset-standard `FinalNewlineRule.kt`.
 
 use ktrs_ast::{Ast, NodeId};
-use ktrs_syntax::SyntaxKind::WHITE_SPACE;
+use ktrs_syntax::SyntaxKind::{FILE, WHITE_SPACE};
 
 use crate::ast_node_edit::AstNodeEdit;
 use crate::ast_node_extension::AstNodeExtension;
 use crate::editorconfig::{INSERT_FINAL_NEWLINE_PROPERTY, PropertyRef};
-use crate::rule::{About, EditorConfig, Emit, RuleId, RuleV2, TraversalState};
+use crate::rule::{About, EditorConfig, Emit, RuleId, RuleV2, TokenSet, TraversalState};
 use crate::rules::STANDARD_RULE_ABOUT;
+
+const VISITED_TYPES: TokenSet = TokenSet::create(&[FILE]);
 
 pub struct FinalNewlineRule {
     insert_final_newline: bool,
@@ -29,6 +31,10 @@ impl Default for FinalNewlineRule {
 impl RuleV2 for FinalNewlineRule {
     fn rule_id(&self) -> RuleId {
         RuleId("standard:final-newline")
+    }
+
+    fn visited_types(&self) -> Option<TokenSet> {
+        Some(VISITED_TYPES)
     }
 
     fn about(&self) -> About {
